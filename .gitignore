@@ -48,8 +48,8 @@ build/
 # ==============================
 *.sqlite3
 *.db
-data/*.json
-data/*.csv
+data/**/*.json
+data/**/*.csv
 !data/.gitkeep
 
 # ==============================
