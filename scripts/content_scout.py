@@ -140,8 +140,118 @@ For "top_performing_content_notes", use ONLY the post_ids provided in top_posts 
 introduce any other post_id. Keep every string field concise and specific to scuba diving \
 content in Goa, not generic social media advice."""
 
+# Passed via output_config.format (json_schema) so the API constrains generation to
+# schema-valid JSON directly - this closes off the whole class of "malformed JSON from
+# unescaped quotes/newlines/unicode" failures, independent of the truncation fix below.
+CONTENT_SCOUT_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "executive_summary": {"type": "string"},
+        "top_content_patterns": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "evidence": {"type": "string"},
+                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                    "recommendation": {"type": "string"},
+                },
+                "required": ["pattern", "evidence", "confidence", "recommendation"],
+                "additionalProperties": False,
+            },
+        },
+        "top_performing_content_notes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "post_id": {"type": "string"},
+                    "likely_reason": {"type": "string"},
+                    "evidence": {"type": "string"},
+                },
+                "required": ["post_id", "likely_reason", "evidence"],
+                "additionalProperties": False,
+            },
+        },
+        "weak_content_patterns": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "evidence": {"type": "string"},
+                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                },
+                "required": ["pattern", "evidence", "confidence"],
+                "additionalProperties": False,
+            },
+        },
+        "content_gaps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "gap": {"type": "string"},
+                    "evidence": {"type": "string"},
+                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                },
+                "required": ["gap", "evidence", "confidence"],
+                "additionalProperties": False,
+            },
+        },
+        "opportunities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "opportunity": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                },
+                "required": ["opportunity", "rationale", "confidence"],
+                "additionalProperties": False,
+            },
+        },
+        "recommended_tests": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "test": {"type": "string"},
+                    "hypothesis": {"type": "string"},
+                    "expected_signal": {"type": "string"},
+                },
+                "required": ["test", "hypothesis", "expected_signal"],
+                "additionalProperties": False,
+            },
+        },
+        "action_plan": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "executive_summary",
+        "top_content_patterns",
+        "top_performing_content_notes",
+        "weak_content_patterns",
+        "content_gaps",
+        "opportunities",
+        "recommended_tests",
+        "action_plan",
+    ],
+    "additionalProperties": False,
+}
 
-def call_claude(api_key: str, payload: dict) -> tuple:
+# 4000 was measured too low against the real 20-post payload (truncated mid-string at
+# ~3,900 tokens). 8000 gives real headroom; the truncation retry escalates further still.
+BASE_MAX_TOKENS = 8000
+RETRY_MAX_TOKENS = 12000
+
+
+class TruncatedResponseError(Exception):
+    """Raised when Claude's response was cut off by the token limit before completing."""
+
+
+def call_claude(api_key: str, payload: dict, max_tokens: int = BASE_MAX_TOKENS) -> tuple:
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -153,22 +263,100 @@ def call_claude(api_key: str, payload: dict) -> tuple:
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=4000,
+        max_tokens=max_tokens,
         system=CONTENT_SCOUT_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
+        output_config={"format": {"type": "json_schema", "schema": CONTENT_SCOUT_RESPONSE_SCHEMA}},
     )
+
+    if response.stop_reason == "max_tokens":
+        raise TruncatedResponseError(
+            f"Response was cut off by the max_tokens limit ({max_tokens}) before it finished."
+        )
 
     text = "".join(block.text for block in response.content if block.type == "text")
     return text, response
 
 
-def parse_claude_json(text: str) -> dict:
+def extract_json_object(text: str) -> dict:
+    """Parse Claude's response as JSON, tolerating markdown fences or minor surrounding
+    text. With output_config.format this should already be clean JSON - these are
+    defense-in-depth fallbacks, not the primary correctness mechanism."""
     cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:]
-    return json.loads(cleaned.strip())
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    fenced = cleaned
+    if fenced.startswith("```"):
+        fenced = fenced.strip("`")
+        if fenced.lower().startswith("json"):
+            fenced = fenced[4:]
+        try:
+            return json.loads(fenced.strip())
+        except json.JSONDecodeError:
+            pass
+
+    # Balanced-brace scan: find the first '{' and its matching '}', tolerating any
+    # surrounding commentary text the model might have added around the JSON object.
+    start = cleaned.find("{")
+    if start != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(cleaned)):
+            ch = cleaned[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = cleaned[start : i + 1]
+                    return json.loads(candidate)  # let JSONDecodeError propagate if still bad
+
+    # Nothing worked - raise the original error against the untouched text for a clear message.
+    return json.loads(cleaned)
+
+
+REQUIRED_RESPONSE_FIELDS = {
+    "executive_summary": str,
+    "top_content_patterns": list,
+    "top_performing_content_notes": list,
+    "weak_content_patterns": list,
+    "content_gaps": list,
+    "opportunities": list,
+    "recommended_tests": list,
+    "action_plan": list,
+}
+
+
+def validate_scout_response(data) -> None:
+    """Fail clearly and specifically rather than silently assembling an incomplete report."""
+    if not isinstance(data, dict):
+        raise DataError(f"Claude's response was not a JSON object (got {type(data).__name__}).")
+
+    missing = [k for k in REQUIRED_RESPONSE_FIELDS if k not in data]
+    if missing:
+        raise DataError(f"Claude's response is missing required field(s): {missing}")
+
+    wrong_type = [
+        k for k, expected in REQUIRED_RESPONSE_FIELDS.items() if not isinstance(data[k], expected)
+    ]
+    if wrong_type:
+        raise DataError(f"Claude's response has the wrong type for field(s): {wrong_type}")
 
 
 def assemble_top_performing_content(top_posts: list, claude_notes: list) -> list:
@@ -240,43 +428,64 @@ def main() -> int:
 
     import anthropic
 
-    try:
-        text, response = call_claude(api_key, payload)
-    except anthropic.AuthenticationError:
-        print("FAILED: Authentication error - the API key was rejected.")
-        return 1
-    except anthropic.PermissionDeniedError:
-        print("FAILED: Permission denied - the API key lacks access to this model.")
-        return 1
-    except anthropic.NotFoundError:
-        print(f"FAILED: Model not found ({MODEL}).")
-        return 1
-    except anthropic.RateLimitError:
-        print("FAILED: Rate limited. Try again in a moment.")
-        return 1
-    except anthropic.APIConnectionError:
-        print("FAILED: Network error - could not reach the Anthropic API.")
-        return 1
-    except anthropic.APIStatusError as e:
-        print(f"FAILED: API error (status {e.status_code}).")
-        return 1
+    api_errors = (
+        anthropic.AuthenticationError,
+        anthropic.PermissionDeniedError,
+        anthropic.NotFoundError,
+        anthropic.RateLimitError,
+        anthropic.APIConnectionError,
+        anthropic.APIStatusError,
+    )
 
-    try:
-        claude_result = parse_claude_json(text)
-    except json.JSONDecodeError:
-        print("Claude's response was not valid JSON on first attempt - retrying once with a stricter reminder...")
+    def describe_api_error(e) -> str:
+        if isinstance(e, anthropic.AuthenticationError):
+            return "Authentication error - the API key was rejected."
+        if isinstance(e, anthropic.PermissionDeniedError):
+            return "Permission denied - the API key lacks access to this model."
+        if isinstance(e, anthropic.NotFoundError):
+            return f"Model not found ({MODEL})."
+        if isinstance(e, anthropic.RateLimitError):
+            return "Rate limited. Try again in a moment."
+        if isinstance(e, anthropic.APIConnectionError):
+            return "Network error - could not reach the Anthropic API."
+        return f"API error (status {e.status_code})."
+
+    claude_result = None
+    response = None
+    last_error = None
+
+    # At most two Claude calls total: one normal attempt, one retry only if the first
+    # was truncated (higher max_tokens) or returned unparseable/invalid JSON.
+    for attempt, max_tokens in enumerate([BASE_MAX_TOKENS, RETRY_MAX_TOKENS], start=1):
         try:
-            retry_payload = dict(payload)
-            retry_payload["_reminder"] = "Respond with ONLY the JSON object, no other text."
-            text2, response2 = call_claude(api_key, retry_payload)
-            claude_result = parse_claude_json(text2)
-            response = response2
-        except json.JSONDecodeError as e:
-            print(f"FAILED: Claude did not return valid JSON: {e}")
+            text, response = call_claude(api_key, payload, max_tokens=max_tokens)
+        except TruncatedResponseError as e:
+            last_error = str(e)
+            if attempt == 1:
+                print(f"{e} Retrying once with max_tokens={RETRY_MAX_TOKENS}...")
+                continue
+            print(f"FAILED: Response was truncated even at max_tokens={RETRY_MAX_TOKENS}. "
+                  "The payload or requested output is too large for this budget - reduce "
+                  "the payload (e.g. fewer evidence posts) rather than raising the limit further.")
+            return 1
+        except api_errors as e:
+            print(f"FAILED: {describe_api_error(e)}")
             return 1
 
-    if not isinstance(claude_result, dict):
-        print("FAILED: Claude's parsed response was not a JSON object.")
+        try:
+            claude_result = extract_json_object(text)
+            validate_scout_response(claude_result)
+            break
+        except (json.JSONDecodeError, DataError) as e:
+            last_error = str(e)
+            if attempt == 1:
+                print(f"Claude's response was invalid ({e}) - retrying once with max_tokens={RETRY_MAX_TOKENS}...")
+                continue
+            print(f"FAILED: Claude did not return a valid, complete response after retry: {last_error}")
+            return 1
+
+    if claude_result is None:
+        print(f"FAILED: Could not obtain a valid response from Claude: {last_error}")
         return 1
 
     top_performing_content = assemble_top_performing_content(
