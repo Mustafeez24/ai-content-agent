@@ -128,24 +128,39 @@ content causes higher engagement" - say "this format was associated with stronge
 engagement in the analyzed sample" or "this is a hypothesis worth testing".
 
 LANGUAGE RULES - the Instagram engagement dataset shows association, not causation.
-NEVER claim that engagement data proves causation.
+NEVER claim that engagement data proves causation, and NEVER phrase a proposed test's
+expected outcome in the past tense as if it already happened.
 
-Avoid these words/phrases as factual claims:
-drives, causes, proves, guarantees, results in, leads to, increases, decreases,
-converts, generates bookings, drives bookings, drives conversions, primary driver,
-engagement driver.
-
-When the data only shows association, prefer phrasing such as:
+For "opportunity"/"rationale"/"evidence"/"theme"/"content_angle"/"core_message" and
+recommended_tests' "evidence_basis" - the fields that describe what the dataset
+ALREADY shows - avoid drives, driving, drove, driven, causes, proves, guarantees,
+results in, leads to, increases, decreases, converts, generates, primary driver,
+engagement driver ENTIRELY, in any tense. Use association language instead:
 "is associated with", "appears alongside", "was observed in", "performed strongly in
-this sample", "may be worth testing", "suggests a possible relationship", "could
-indicate", "test whether", "measure whether", "compare whether".
+this sample", "appears frequently in high-performing posts", "could indicate", "may
+be worth testing".
+  Bad: "Instructor quality is the primary driver of engagement."
+  Good: "Instructor praise appears frequently in high-performing posts; test whether
+  dedicated instructor content is associated with stronger engagement."
+  Bad: "This format has driven stronger saves in the sample."
+  Good: "This format is associated with stronger saves in the observed sample."
 
-"increases"/"decreases"/"converts"/"generates"/"results in"/"leads to" are acceptable
-ONLY inside a testable framing such as "test whether bookings increase" or "measure
-whether engagement increases" - never as a bare factual claim such as "this format
-increases bookings". Do not mechanically swap one phrase for another word-by-word if
-the sentence becomes grammatically wrong - generate the correct hedged phrasing from
-the start.
+For recommended_tests' "test_name"/"hypothesis"/"variable_to_test"/"success_metric" -
+the fields that describe a test that has NOT been run yet - phrase every claim as a
+proposed comparison, using "Test whether...", "Measure whether...", "Evaluate
+whether...", "Target: ...", "Success if...", or an explicit "X compared to/relative
+to/versus/than Y" comparison. Present-tense directional words (increase, drive,
+generate, decrease, convert, result in, lead to) are fine THERE as long as the
+sentence is framed as a proposed test this way - but NEVER in the past tense
+(increased, drove, generated, decreased, converted, resulted in, led to), because
+that claims a result the Instagram dataset does not contain.
+  Bad (hypothesis): "Named instructor spotlights will increase engagement and drive
+  bookings."
+  Good (hypothesis): "Test whether named instructor spotlights receive higher
+  engagement than comparable testimonials without an instructor focus."
+  Bad (success_metric): "Engagement increased." / "This generated more bookings."
+  Good (success_metric): "Measure whether likes increase by 15% compared to the
+  sample average." or "Target: 15% more saves than the comparison group."
 
 COMPETITOR CLAIMS - the Stage 4.1 report contains FlyingFish data only, never actual
 competitor data. Do NOT claim things like "FlyingFish differentiates from
@@ -172,13 +187,10 @@ Never present those as established outcomes.
 
 RECOMMENDED TESTS - each test must stay genuinely useful: state what to change, what
 comparison to make, what metric to measure, and what observation would support/reject
-the hypothesis. Use language such as "Test whether...", "Compare...", "Measure...",
-"Evaluate whether...", "Track...". If a test mentions bookings or conversions, make
-explicit that these are FUTURE MEASUREMENT TARGETS the Instagram dataset does not
-itself establish - never a promised result.
-  Bad: "Named instructor spotlights will increase engagement and drive bookings."
-  Better: "Test whether named instructor spotlights receive different engagement than
-  comparable testimonials without an instructor focus."
+the hypothesis (see the test_name/hypothesis/variable_to_test/success_metric guidance
+in LANGUAGE RULES above for exactly how to phrase these). If a test mentions bookings
+or conversions, make explicit that these are FUTURE MEASUREMENT TARGETS the Instagram
+dataset does not itself establish - never a promised result.
 
 ACTION PLAN - action items describe an action and how to measure it, never a claimed
 causal effect.
@@ -515,26 +527,64 @@ def parse_action_plan(items: list) -> dict:
 # claim itself is unsafe as worded; "soft" violations are missing metadata that can be
 # safely auto-corrected without discarding the claim.
 #
-# Causal-language detection is split into two tiers:
-# - "unconditional": words/phrases that assert causation outright (drives, causes,
-#   proves, guarantees, "(primary/engagement) driver") - never acceptable, hedged or not.
-# - "conditional": words (increases, decreases, converts, generates, results in, leads
-#   to) that are fine inside a testable framing ("test whether bookings increase") but
-#   a hard violation when stated as a bare factual claim ("this increases bookings").
-# Checked per-sentence so "Test whether X increases" isn't penalized for a causal word
-# appearing elsewhere in a different, genuinely causal sentence in the same field.
-_UNCONDITIONAL_CAUSAL_RE = re.compile(
-    r"\b(drives?|driving|drove|driven|causes?|caused|proves?|proved|guarantees?|guaranteed)\b"
+# Causal-language detection distinguishes three things, per sentence:
+# 1. PAST-TENSE trend claims ("increased", "drove", "generated", "resulted in", "led
+#    to") always a hard violation, in every field, hedged or not - the Instagram
+#    dataset never establishes that a change already produced a measured outcome
+#    (a proposed test's hypothesis/success_metric describes a FUTURE measurement, so
+#    a past-tense verb there is still an unsupported claim that it already happened).
+# 2. PRESENT/BASE/GERUND trend words ("increases", "drives", "generating"...) - a hard
+#    violation unless the sentence is explicitly framed as a proposed test/measurement
+#    (see the hedge regexes below). In hypothesis/success_metric/variable_to_test/
+#    test_name specifically (is_test_field=True) - fields whose entire purpose is to
+#    describe a not-yet-run test - a wider set of comparative/target framings also
+#    counts as a hedge, since "Measure X compared to baseline" is exactly what those
+#    fields are for. evidence_basis stays strict (only "test/measure/... whether"
+#    exempts it) since it must justify the test using only already-observed evidence.
+# 3. Strong epistemic claims ("causes", "proves", "guarantees", "primary driver",
+#    "engagement driver") - a hard violation everywhere unless the sentence uses the
+#    universal "test/measure/... whether" hedge - never exempted by field alone, since
+#    these assert the strongest kind of certainty.
+_TREND_PRESENT_RE = re.compile(
+    r"\b(drives?|driving)\b"
+    r"|\b(increas(?:e|es|ing))\b"
+    r"|\b(decreas(?:e|es|ing))\b"
+    r"|\b(convert(?:s|ing)?)\b"
+    r"|\b(generat(?:e|es|ing))\b"
+    r"|\bresults?\s+in\b|\bresulting\s+in\b"
+    r"|\bleads?\s+to\b|\bleading\s+to\b",
+    re.IGNORECASE,
+)
+_TREND_PAST_RE = re.compile(
+    r"\b(drove|driven)\b"
+    r"|\bincreased\b|\bdecreased\b|\bconverted\b|\bgenerated\b"
+    r"|\bresulted\s+in\b|\bled\s+to\b",
+    re.IGNORECASE,
+)
+_STRONG_CLAIM_RE = re.compile(
+    r"\b(causes?|causing|caused)\b"
+    r"|\b(proves?|proving|proved)\b"
+    r"|\b(guarantees?|guaranteeing|guaranteed)\b"
     r"|\bprimary\s+(?:engagement\s+)?drivers?\b"
     r"|\bengagement\s+drivers?\b",
     re.IGNORECASE,
 )
-_CONDITIONAL_CAUSAL_RE = re.compile(
-    r"\b(increases?|decreases?|converts?|generates?)\b|\bresults?\s+in\b|\bleads?\s+to\b",
-    re.IGNORECASE,
-)
-_HEDGE_TRIGGER_RE = re.compile(
+_WHETHER_HEDGE_RE = re.compile(
     r"\b(test|measure|compare|evaluate|track|assess|determine)\s+whether\b", re.IGNORECASE
+)
+# Additional framings accepted ONLY in test-design fields (hypothesis, success_metric,
+# variable_to_test, test_name) - these fields inherently describe a proposed test's
+# design/target rather than a claim about what the dataset already showed, so
+# comparative/target language ("compared to baseline", "target: +15%", "than the
+# control group") is itself sufficient framing without also requiring "... whether".
+_TEST_FRAMING_HEDGE_RE = re.compile(
+    r"\btarget(?:s|ed|ing)?\s*:?\b"
+    r"|\bsuccess\s+if\b"
+    r"|\bcompar(?:e|es|ed|ing)\b"
+    r"|\brelative\s+to\b"
+    r"|\bversus\b|\bvs\.?\b"
+    r"|\bthan\b",
+    re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -566,15 +616,24 @@ def _sentences(text: str) -> list:
     return parts or [text]
 
 
-def _causal_language_match(text: str):
+def _causal_language_match(text: str, is_test_field: bool = False):
     """Return (matched_phrase, sentence) for the first unsupported causal-language use
-    in text, or None if there isn't one. See the tier comment above _UNCONDITIONAL_CAUSAL_RE."""
+    in text, or None if there isn't one. See the tier comment above _TREND_PRESENT_RE."""
     for sentence in _sentences(text):
-        m = _UNCONDITIONAL_CAUSAL_RE.search(sentence)
+        m = _TREND_PAST_RE.search(sentence)
         if m:
             return m.group(0), sentence
-        m = _CONDITIONAL_CAUSAL_RE.search(sentence)
-        if m and not _HEDGE_TRIGGER_RE.search(sentence):
+
+        hedged = bool(_WHETHER_HEDGE_RE.search(sentence)) or (
+            is_test_field and bool(_TEST_FRAMING_HEDGE_RE.search(sentence))
+        )
+
+        m = _TREND_PRESENT_RE.search(sentence)
+        if m and not hedged:
+            return m.group(0), sentence
+
+        m = _STRONG_CLAIM_RE.search(sentence)
+        if m and not _WHETHER_HEDGE_RE.search(sentence):
             return m.group(0), sentence
     return None
 
@@ -594,10 +653,13 @@ _CONTENT_OPPORTUNITIES_TEXT_FIELDS = (
 )
 _STRATEGY_THEMES_TEXT_FIELDS = ("theme", "evidence")
 _RECOMMENDED_FORMATS_TEXT_FIELDS = ("format", "rationale")
-_RECOMMENDED_TESTS_TEXT_FIELDS = (
-    "test_name", "hypothesis", "variable_to_test", "format",
-    "audience", "success_metric", "suggested_duration", "evidence_basis",
-)
+# test_name/hypothesis/variable_to_test/success_metric describe the proposed test
+# itself (is_test_field=True - see _causal_language_match) - format/audience/
+# suggested_duration/evidence_basis stay strict; evidence_basis in particular must
+# justify the test using only already-observed evidence, not a comparative target.
+_RECOMMENDED_TESTS_LENIENT_FIELDS = ("test_name", "hypothesis", "variable_to_test", "success_metric")
+_RECOMMENDED_TESTS_STRICT_FIELDS = ("format", "audience", "suggested_duration", "evidence_basis")
+_RECOMMENDED_TESTS_TEXT_FIELDS = _RECOMMENDED_TESTS_LENIENT_FIELDS + _RECOMMENDED_TESTS_STRICT_FIELDS
 _GROUP_TEXT_FIELDS = {
     "content_opportunities": _CONTENT_OPPORTUNITIES_TEXT_FIELDS,
     "strategy_themes": _STRATEGY_THEMES_TEXT_FIELDS,
@@ -606,24 +668,28 @@ _GROUP_TEXT_FIELDS = {
 
 
 def _iter_text_fields(data: dict):
-    """Yield (location, text) for every free-text string field in a response - every
-    claim-bearing field across every item, not a hardcoded list of specific indexes."""
-    yield "executive_summary", data.get("executive_summary", "")
+    """Yield (location, text, is_test_field) for every free-text string field in a
+    response - every claim-bearing field across every item, not a hardcoded list of
+    specific indexes. is_test_field marks fields whose entire purpose is describing a
+    not-yet-run test (see _causal_language_match)."""
+    yield "executive_summary", data.get("executive_summary", ""), False
 
     for i, item in enumerate(data.get("content_opportunities", [])):
         for field in _CONTENT_OPPORTUNITIES_TEXT_FIELDS:
-            yield f"content_opportunities[{i}].{field}", item.get(field, "")
+            yield f"content_opportunities[{i}].{field}", item.get(field, ""), False
     for i, item in enumerate(data.get("strategy_themes", [])):
         for field in _STRATEGY_THEMES_TEXT_FIELDS:
-            yield f"strategy_themes[{i}].{field}", item.get(field, "")
+            yield f"strategy_themes[{i}].{field}", item.get(field, ""), False
     for i, item in enumerate(data.get("recommended_formats", [])):
         for field in _RECOMMENDED_FORMATS_TEXT_FIELDS:
-            yield f"recommended_formats[{i}].{field}", item.get(field, "")
+            yield f"recommended_formats[{i}].{field}", item.get(field, ""), False
     for i, item in enumerate(data.get("recommended_tests", [])):
-        for field in _RECOMMENDED_TESTS_TEXT_FIELDS:
-            yield f"recommended_tests[{i}].{field}", item.get(field, "")
+        for field in _RECOMMENDED_TESTS_LENIENT_FIELDS:
+            yield f"recommended_tests[{i}].{field}", item.get(field, ""), True
+        for field in _RECOMMENDED_TESTS_STRICT_FIELDS:
+            yield f"recommended_tests[{i}].{field}", item.get(field, ""), False
     for i, text in enumerate(data.get("action_plan", [])):
-        yield f"action_plan[{i}]", text
+        yield f"action_plan[{i}]", text, False
 
 
 def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
@@ -632,10 +698,10 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
     hard = []
     soft = []
 
-    for location, text in _iter_text_fields(data):
+    for location, text, is_test_field in _iter_text_fields(data):
         if not isinstance(text, str):
             continue
-        causal = _causal_language_match(text)
+        causal = _causal_language_match(text, is_test_field=is_test_field)
         if causal:
             phrase, sentence = causal
             hard.append(

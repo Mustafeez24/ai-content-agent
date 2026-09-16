@@ -543,6 +543,127 @@ class TestCausalAndCompetitorLanguageHardening(unittest.TestCase):
         self.assertTrue(any(v["type"] == "flag_verification" for v in violations["soft"]))
 
 
+# --- Stage 6.2: real-run failure regression. The real Stage 4.1-driven run rejected a
+# response for causal language in fields like "primary driver"/"driven" (rationale,
+# theme, evidence, evidence_basis) and "increase"/"drive"/"generate" in hypothesis/
+# success_metric - even when those hypothesis/success_metric uses were legitimate test
+# framing ("will drive higher engagement than..."). This class locks in the fix:
+# observational fields (rationale/evidence/theme/evidence_basis) stay strict in every
+# tense; hypothesis/success_metric/variable_to_test/test_name accept a wider set of
+# comparison framings ("than", "compared to", "relative to", "target:", "success if")
+# without needing the literal word "whether"; and a PAST-TENSE claim of an already-
+# observed result is a hard violation everywhere, even inside a test-design field.
+class TestRealRunFailureRegression(unittest.TestCase):
+    def test_primary_driver_in_rationale_is_still_hard_violation(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"rationale": "Instructor quality is the primary driver of engagement."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_past_tense_driven_in_rationale_is_still_hard_violation(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"rationale": "Engagement was driven by testimonials in this sample."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_drive_in_theme_label_is_still_hard_violation(self):
+        resp = make_strategy_response()
+        resp["strategy_themes"][0]["theme"] = "Content that drives engagement"
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_driving_in_theme_evidence_is_still_hard_violation(self):
+        resp = make_strategy_response()
+        resp["strategy_themes"][0]["evidence"] = "Named-instructor posts are driving stronger comment activity."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_driven_in_format_rationale_is_still_hard_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_formats"][0]["rationale"] = "This format has driven stronger saves in the sample."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_evidence_basis_stays_strict_for_unhedged_drive(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["evidence_basis"] = "This pattern appears to drive stronger saves across the sample."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_evidence_basis_stays_strict_for_past_tense_driven(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["evidence_basis"] = "Top posts were driven primarily by testimonial framing."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_hypothesis_drive_allowed_with_comparison(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = (
+            "Named instructor spotlights will drive higher engagement than comparable "
+            "generic testimonials."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_success_metric_increase_allowed_with_compared_to(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["success_metric"] = "Engagement increases by 15% compared to the baseline average."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_success_metric_increase_allowed_with_relative_to(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["success_metric"] = "Booking inquiries increase by 20% relative to the control period."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_success_metric_generate_allowed_with_than(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["success_metric"] = "This format will generate more inquiries than the comparison group."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_success_metric_increase_without_comparison_is_still_hard_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["success_metric"] = "Engagement will increase."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_past_tense_result_claim_in_success_metric_always_hard_violation(self):
+        # Example E: a claimed *already observed* result is never allowed, even inside
+        # a test-design field with comparison language.
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["success_metric"] = (
+            "The discount increased booking inquiries by 20% compared to baseline."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_past_tense_generated_in_hypothesis_always_hard_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "This format generated more bookings than the comparison group."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_unsupported_recommendation_stated_as_fact_in_hypothesis_is_hard_violation(self):
+        # Example G: a bare, unhedged directional claim in a hypothesis field is still a
+        # violation - test-design fields widen the accepted hedge *phrases*, they do not
+        # exempt directional verbs entirely.
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "Instructor-focused content increases engagement."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_proposed_experiment_in_hypothesis_is_allowed(self):
+        # Example F: the same claim, properly framed as a proposed test.
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "Test whether instructor-focused content increases engagement."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+
 # --- error message extraction (Step 2 fix: real Anthropic error, never a bare status) ---
 class TestApiErrorMessageExtraction(unittest.TestCase):
     def test_extracts_message_from_body_error_dict(self):
