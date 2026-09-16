@@ -66,7 +66,7 @@ def make_opportunity(**overrides):
         "sample_size": 1,
         "confidence": "low",
         "requires_verification": False,
-        "verification_reason": None,
+        "verification_reason": "",
     }
     base.update(overrides)
     return base
@@ -86,7 +86,7 @@ def make_test_item(**overrides):
         "evidence_post_ids": ["POST_TOP1"],
         "confidence": "low",
         "requires_verification": False,
-        "verification_reason": None,
+        "verification_reason": "",
     }
     base.update(overrides)
     return base
@@ -105,7 +105,7 @@ def make_strategy_response(opportunity_overrides=None, **top_overrides):
                 "sample_size": 1,
                 "confidence": "low",
                 "requires_verification": False,
-                "verification_reason": None,
+                "verification_reason": "",
             }
         ],
         "recommended_formats": [
@@ -117,15 +117,14 @@ def make_strategy_response(opportunity_overrides=None, **top_overrides):
                 "sample_size": 1,
                 "confidence": "low",
                 "requires_verification": False,
-                "verification_reason": None,
+                "verification_reason": "",
             }
         ],
         "recommended_tests": [make_test_item()],
-        "action_plan": {
-            "immediate": ["Draft one testimonial-style reel in the next 1-2 weeks"],
-            "next": ["Review engagement after the next 4 weeks"],
-            "later": [],
-        },
+        "action_plan": [
+            "[IMMEDIATE] Draft one testimonial-style reel in the next 1-2 weeks",
+            "[NEXT] Review engagement after the next 4 weeks",
+        ],
     }
     resp.update(top_overrides)
     return resp
@@ -175,6 +174,79 @@ class TestKnownPostIds(unittest.TestCase):
         self.assertEqual(ids, {"POST_TOP1", "POST_TOP2"})
 
 
+# --- Regression: the simplified schema must stay meaningfully below the complexity
+# that produced the real "compiled grammar is too large" 400 error, and must not have
+# silently dropped any required output section in the process of simplifying it. ---
+class TestSchemaComplexityRegression(unittest.TestCase):
+    def _count_enums_and_unions(self, schema):
+        enums = 0
+        unions = 0
+        if isinstance(schema, dict):
+            if "enum" in schema:
+                enums += 1
+            if isinstance(schema.get("type"), list):
+                unions += 1
+            for v in schema.get("properties", {}).values():
+                e, u = self._count_enums_and_unions(v)
+                enums += e
+                unions += u
+            if "items" in schema:
+                e, u = self._count_enums_and_unions(schema["items"])
+                enums += e
+                unions += u
+        return enums, unions
+
+    def test_schema_has_no_enum_fields(self):
+        # The real 400 was "compiled grammar too large" from Anthropic's structured-
+        # output compiler; enum/union branching are the most plausible contributors.
+        # The fix removes all enums entirely - allowed values are enforced in Python.
+        enums, _ = self._count_enums_and_unions(strat.CONTENT_STRATEGY_RESPONSE_SCHEMA)
+        self.assertEqual(enums, 0, "schema should contain zero JSON-schema enums after simplification")
+
+    def test_schema_has_no_nullable_type_unions(self):
+        _, unions = self._count_enums_and_unions(strat.CONTENT_STRATEGY_RESPONSE_SCHEMA)
+        self.assertEqual(unions, 0, "schema should contain zero [type, null] unions after simplification")
+
+    def test_schema_size_below_reasonable_threshold(self):
+        size = len(json.dumps(strat.CONTENT_STRATEGY_RESPONSE_SCHEMA))
+        # Generous ceiling - well above the pre-simplification ~4KB that failed, this
+        # just guards against future regrowth without being a brittle exact-size check.
+        self.assertLess(size, 6000, f"schema grew to {size} chars - re-check grammar complexity")
+
+    def test_action_plan_is_flat_not_nested_object(self):
+        # One fewer distinct object shape for the grammar compiler than the original
+        # {immediate, next, later} nested object.
+        schema = strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["properties"]["action_plan"]
+        self.assertEqual(schema, {"type": "array", "items": {"type": "string"}})
+
+
+class TestSchemaContainsRequiredSections(unittest.TestCase):
+    def test_all_critical_output_sections_present(self):
+        top_level_props = set(strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["properties"].keys())
+        # top_performing_content and metadata are assembled in Python from Stage 4.1's
+        # deterministic data (see main()), not requested from Claude - they are not part
+        # of the API-facing schema by design (Claude never touches those numbers), but
+        # must appear in the final written output. Check both surfaces.
+        api_schema_sections = {
+            "executive_summary", "content_opportunities", "strategy_themes",
+            "recommended_formats", "recommended_tests", "action_plan",
+        }
+        self.assertEqual(top_level_props, api_schema_sections)
+        self.assertEqual(set(strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["required"]), api_schema_sections)
+
+    def test_final_output_file_contains_all_critical_sections(self):
+        expected = {
+            "metadata", "executive_summary", "top_content_patterns", "weak_content_patterns",
+            "content_gaps", "opportunities", "recommended_tests", "action_plan", "top_performing_content",
+        }
+        # These are Stage 4.1's own section names (its INPUT contract, re-verified here
+        # against REQUIRED_SECTIONS) - Stage 6's own OUTPUT uses different, purpose-built
+        # names (content_opportunities/strategy_themes/recommended_formats) since it is a
+        # new artifact, not a copy of Stage 4.1's report. Confirm Stage 6 still reads
+        # every one of these from its input.
+        self.assertEqual(set(strat.REQUIRED_SECTIONS), expected)
+
+
 # --- 6/7: malformed / truncated response handling (pure function) ---
 class TestJsonExtraction(unittest.TestCase):
     def test_valid_json_parses(self):
@@ -203,17 +275,16 @@ class TestValidation(unittest.TestCase):
         with self.assertRaises(strat.DataError):
             strat.validate_strategy_response(resp)
 
-    def test_malformed_action_plan_rejected(self):
+    def test_action_plan_wrong_type_rejected(self):
+        # action_plan is a flat array of strings (schema-simplified) - a dict is wrong.
         resp = make_strategy_response()
-        resp["action_plan"] = {"immediate": ["x"]}  # missing next/later
+        resp["action_plan"] = {"immediate": ["x"], "next": [], "later": []}
         with self.assertRaises(strat.DataError):
             strat.validate_strategy_response(resp)
 
-    def test_action_plan_wrong_type_rejected(self):
+    def test_action_plan_valid_flat_list_accepted(self):
         resp = make_strategy_response()
-        resp["action_plan"] = ["flat", "list", "not", "allowed"]
-        with self.assertRaises(strat.DataError):
-            strat.validate_strategy_response(resp)
+        strat.validate_strategy_response(resp)  # should not raise
 
 
 # --- 9: invented post ID ---
@@ -272,19 +343,32 @@ class TestPerformanceClaimsAndTargets(unittest.TestCase):
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertEqual(violations["hard"], [])
 
-    def test_schema_requires_target_type_enum(self):
+    def test_schema_requires_target_type_field(self):
+        # Schema-simplified: target_type is a plain required string (not a JSON-schema
+        # enum, to keep the compiled grammar small) - the literal value is enforced by
+        # find_evidence_violations() instead, tested above.
         schema = strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["properties"]["recommended_tests"]["items"]
         self.assertIn("target_type", schema["required"])
-        self.assertEqual(schema["properties"]["target_type"]["enum"], ["proposed_test_target"])
+        self.assertEqual(schema["properties"]["target_type"], {"type": "string"})
+        self.assertNotIn("enum", schema["properties"]["target_type"])
+
+    def test_invalid_confidence_value_is_hard_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["confidence"] = "extremely high"
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("confidence" in v for v in violations["hard"]))
 
 
 # --- 15: hypothesis correctly labeled (structural + pass-through) ---
 class TestEvidenceTypeLabeling(unittest.TestCase):
-    def test_evidence_type_enum_in_schema(self):
+    def test_evidence_type_is_plain_string_in_schema(self):
+        # Schema-simplified: evidence_type is a plain required string, not a JSON-schema
+        # enum - the allowed-value set is enforced by find_evidence_violations() instead.
         schema = strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["properties"]["content_opportunities"]["items"]
+        self.assertEqual(schema["properties"]["evidence_type"], {"type": "string"})
         self.assertEqual(
-            sorted(schema["properties"]["evidence_type"]["enum"]),
-            sorted(["observed", "interpretation", "hypothesis", "recommendation"]),
+            strat.ALLOWED_EVIDENCE_TYPES,
+            {"observed", "interpretation", "hypothesis", "recommendation"},
         )
 
     def test_hypothesis_label_survives_violation_check(self):
@@ -293,20 +377,45 @@ class TestEvidenceTypeLabeling(unittest.TestCase):
         self.assertEqual(violations["hard"], [])
         self.assertEqual(resp["content_opportunities"][0]["evidence_type"], "hypothesis")
 
+    def test_invalid_evidence_type_is_hard_violation(self):
+        resp = make_strategy_response(opportunity_overrides={"evidence_type": "definitely-true-fact"})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("evidence_type" in v for v in violations["hard"]))
+
 
 # --- Calendar period hardening ---
 class TestCalendarPeriods(unittest.TestCase):
     def test_hardcoded_quarter_in_action_plan_is_hard_violation(self):
         resp = make_strategy_response()
-        resp["action_plan"]["immediate"] = ["Launch a Q4 2025 campaign."]
+        resp["action_plan"] = ["[IMMEDIATE] Launch a Q4 2025 campaign."]
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertTrue(any("calendar" in v.lower() for v in violations["hard"]))
 
     def test_relative_timeframe_allowed(self):
         resp = make_strategy_response()
-        resp["action_plan"]["immediate"] = ["Launch a campaign in the next 4 weeks."]
+        resp["action_plan"] = ["[IMMEDIATE] Launch a campaign in the next 4 weeks."]
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertEqual(violations["hard"], [])
+
+
+class TestActionPlanParsing(unittest.TestCase):
+    def test_parse_action_plan_buckets_by_prefix(self):
+        items = [
+            "[IMMEDIATE] Do this now",
+            "[NEXT] Do this soon",
+            "[LATER] Do this eventually",
+            "[immediate] lowercase tag also works",
+        ]
+        result = strat.parse_action_plan(items)
+        self.assertEqual(result["immediate"], ["Do this now", "lowercase tag also works"])
+        self.assertEqual(result["next"], ["Do this soon"])
+        self.assertEqual(result["later"], ["Do this eventually"])
+
+    def test_untagged_item_defaults_to_next_not_dropped(self):
+        result = strat.parse_action_plan(["No bracket tag here"])
+        self.assertEqual(result["next"], ["No bracket tag here"])
+        self.assertEqual(result["immediate"], [])
+        self.assertEqual(result["later"], [])
 
 
 # --- 16: external/business claim requires verification ---

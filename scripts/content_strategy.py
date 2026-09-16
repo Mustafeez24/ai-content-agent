@@ -150,12 +150,27 @@ HARD RULES:
 8. If something cannot be established from the supplied report, say so explicitly -
    prefer "not established by this dataset" over speculation.
 
+FIELD CONVENTIONS (the schema uses plain types for these - follow these conventions
+exactly, they are validated after your response is parsed):
+- "evidence_type" must be exactly one of: observed, interpretation, hypothesis, recommendation.
+- "confidence" must be exactly one of: high, medium, low.
+- "target_type" on every recommended_tests item must be exactly: proposed_test_target.
+- "sample_size" is an integer: the number of posts the claim is based on, or 0 if the
+  claim is not tied to a specific count of posts (0 is not a real sample size - it means
+  "not applicable", never claim 0 posts support something).
+- "verification_reason" is a string: your explanation when requires_verification is
+  true, or an empty string "" when requires_verification is false.
+- "action_plan" is a flat array of strings. Prefix EVERY item with exactly one of
+  "[IMMEDIATE] ", "[NEXT] ", or "[LATER] " (including the brackets and trailing space)
+  to indicate its priority/timeframe, e.g. "[IMMEDIATE] Draft one testimonial-style reel
+  in the next 1-2 weeks."
+
 Respond with ONLY a single valid JSON object (no markdown code fences, no commentary \
 before or after) matching exactly the schema you are given. For every evidence_post_ids \
 field, list only post_ids from "known_post_ids", or an empty array if not tied to \
 specific posts. Set requires_verification=true whenever a claim touches a business \
 fact, external claim, or competitor comparison not supplied as verified data, and \
-explain what needs verification in verification_reason (otherwise null)."""
+explain what needs verification in verification_reason (otherwise "")."""
 
 
 CONTENT_STRATEGY_SYSTEM_PROMPT = _build_system_prompt()
@@ -163,15 +178,27 @@ CONTENT_STRATEGY_SYSTEM_PROMPT = _build_system_prompt()
 # Evidence fields shared by every claim-bearing item - structurally required, mirroring
 # Stage 4.1's hardening so Claude cannot omit evidence classification or the
 # verification flag.
+# Deliberately NOT enums and NOT nullable unions - a real API call against the original
+# (enum + [type,null]-union) version of this schema failed with "The compiled grammar is
+# too large" from Anthropic's structured-output compiler. Every field here is a single
+# plain type, structurally guaranteed to be present by output_config.format, but the
+# *allowed values* (evidence_type, confidence) and the *null convention* (sample_size=0,
+# verification_reason="") are enforced in Python by find_evidence_violations() /
+# normalize_evidence_item() below instead of in the schema. This does not weaken
+# validation - an invalid value here is now a hard violation, exactly like an invented
+# post_id - it just moves the check from the API's grammar compiler to our own code.
 _EVIDENCE_FIELDS = {
-    "evidence_type": {"type": "string", "enum": ["observed", "interpretation", "hypothesis", "recommendation"]},
+    "evidence_type": {"type": "string"},
     "evidence_post_ids": {"type": "array", "items": {"type": "string"}},
-    "sample_size": {"type": ["integer", "null"]},
-    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    "sample_size": {"type": "integer"},
+    "confidence": {"type": "string"},
     "requires_verification": {"type": "boolean"},
-    "verification_reason": {"type": ["string", "null"]},
+    "verification_reason": {"type": "string"},
 }
 _EVIDENCE_FIELD_NAMES = list(_EVIDENCE_FIELDS.keys())
+
+ALLOWED_EVIDENCE_TYPES = {"observed", "interpretation", "hypothesis", "recommendation"}
+ALLOWED_CONFIDENCE_LEVELS = {"high", "medium", "low"}
 
 CONTENT_STRATEGY_RESPONSE_SCHEMA = {
     "type": "object",
@@ -234,7 +261,7 @@ CONTENT_STRATEGY_RESPONSE_SCHEMA = {
                 "properties": {
                     "test_name": {"type": "string"},
                     "hypothesis": {"type": "string"},
-                    "target_type": {"type": "string", "enum": ["proposed_test_target"]},
+                    "target_type": {"type": "string"},
                     "variable_to_test": {"type": "string"},
                     "format": {"type": "string"},
                     "audience": {"type": "string"},
@@ -242,9 +269,9 @@ CONTENT_STRATEGY_RESPONSE_SCHEMA = {
                     "suggested_duration": {"type": "string"},
                     "evidence_basis": {"type": "string"},
                     "evidence_post_ids": {"type": "array", "items": {"type": "string"}},
-                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                    "confidence": {"type": "string"},
                     "requires_verification": {"type": "boolean"},
-                    "verification_reason": {"type": ["string", "null"]},
+                    "verification_reason": {"type": "string"},
                 },
                 "required": [
                     "test_name", "hypothesis", "target_type", "variable_to_test", "format",
@@ -254,16 +281,12 @@ CONTENT_STRATEGY_RESPONSE_SCHEMA = {
                 "additionalProperties": False,
             },
         },
-        "action_plan": {
-            "type": "object",
-            "properties": {
-                "immediate": {"type": "array", "items": {"type": "string"}},
-                "next": {"type": "array", "items": {"type": "string"}},
-                "later": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["immediate", "next", "later"],
-            "additionalProperties": False,
-        },
+        # Flat array (like Stage 4.1's action_plan), not a nested {immediate,next,later}
+        # object - one less distinct object shape for the grammar compiler. Each string
+        # is prefixed "[IMMEDIATE]"/"[NEXT]"/"[LATER]" by convention (see system prompt)
+        # and parsed back into the immediate/next/later buckets in Python before the
+        # output file is written - the persisted contract is unchanged.
+        "action_plan": {"type": "array", "items": {"type": "string"}},
     },
     "required": [
         "executive_summary", "content_opportunities", "strategy_themes",
@@ -390,8 +413,10 @@ REQUIRED_RESPONSE_FIELDS = {
     "strategy_themes": list,
     "recommended_formats": list,
     "recommended_tests": list,
-    "action_plan": dict,
+    "action_plan": list,
 }
+
+_ACTION_BUCKET_RE = re.compile(r"^\[(IMMEDIATE|NEXT|LATER)\]\s*(.*)$", re.IGNORECASE)
 
 
 def validate_strategy_response(data) -> None:
@@ -409,9 +434,21 @@ def validate_strategy_response(data) -> None:
     if wrong_type:
         raise DataError(f"Claude's response has the wrong type for field(s): {wrong_type}")
 
-    for key in ("immediate", "next", "later"):
-        if key not in data["action_plan"] or not isinstance(data["action_plan"][key], list):
-            raise DataError(f"Claude's response action_plan is missing or malformed for '{key}'")
+
+def parse_action_plan(items: list) -> dict:
+    """Parse the flat '[IMMEDIATE]'/'[NEXT]'/'[LATER]'-prefixed action_plan list into
+    the {immediate, next, later} structure for the output file. Untagged items default
+    to 'next' rather than being dropped."""
+    buckets = {"immediate": [], "next": [], "later": []}
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        m = _ACTION_BUCKET_RE.match(item.strip())
+        if m:
+            buckets[m.group(1).lower()].append(m.group(2).strip())
+        else:
+            buckets["next"].append(item.strip())
+    return buckets
 
 
 # Mechanical, regex-based safety checks against the response's actual text content -
@@ -454,11 +491,8 @@ def _iter_text_fields(data: dict):
     for i, item in enumerate(data.get("recommended_tests", [])):
         for field in ("hypothesis", "success_metric", "evidence_basis"):
             yield f"recommended_tests[{i}].{field}", item.get(field, "")
-    action_plan = data.get("action_plan", {})
-    if isinstance(action_plan, dict):
-        for bucket in ("immediate", "next", "later"):
-            for i, text in enumerate(action_plan.get(bucket, [])):
-                yield f"action_plan.{bucket}[{i}]", text
+    for i, text in enumerate(data.get("action_plan", [])):
+        yield f"action_plan[{i}]", text
 
 
 def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
@@ -497,12 +531,21 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
             if invalid_ids:
                 hard.append(f"{loc}: evidence_post_ids references post_id(s) not in the supplied dataset: {invalid_ids}")
 
-            sample_size = item.get("sample_size")
+            evidence_type = item.get("evidence_type")
+            if evidence_type not in ALLOWED_EVIDENCE_TYPES:
+                hard.append(f"{loc}: evidence_type must be one of {sorted(ALLOWED_EVIDENCE_TYPES)}, got {evidence_type!r}")
+
             confidence = item.get("confidence")
+            if confidence not in ALLOWED_CONFIDENCE_LEVELS:
+                hard.append(f"{loc}: confidence must be one of {sorted(ALLOWED_CONFIDENCE_LEVELS)}, got {confidence!r}")
+
+            # sample_size=0 is the "not applicable" sentinel (schema requires a plain
+            # integer, not a nullable one - see _EVIDENCE_FIELDS comment).
+            sample_size = item.get("sample_size")
             requires_verification = bool(item.get("requires_verification", False))
             combined_text = " ".join(str(item.get(f, "")) for f in (label_field, "evidence", "rationale") if f in item)
 
-            if sample_size is not None and sample_size <= 2 and confidence == "high":
+            if sample_size and sample_size <= 2 and confidence == "high":
                 soft.append(
                     {
                         "loc": loc,
@@ -511,7 +554,7 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
                     }
                 )
 
-            if sample_size is not None and sample_size <= 2 and not requires_verification and _UNIVERSAL_LANGUAGE_RE.search(combined_text):
+            if sample_size and sample_size <= 2 and not requires_verification and _UNIVERSAL_LANGUAGE_RE.search(combined_text):
                 soft.append(
                     {
                         "loc": loc,
@@ -529,7 +572,8 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
                     }
                 )
 
-    # recommended_tests: check evidence_post_ids validity too (separate schema shape).
+    # recommended_tests: separate schema shape (no evidence_type field) - check
+    # evidence_post_ids, confidence, and the proposed_test_target label.
     for i, item in enumerate(data.get("recommended_tests", [])):
         if not isinstance(item, dict):
             continue
@@ -540,6 +584,9 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
             hard.append(f"{loc}: evidence_post_ids references post_id(s) not in the supplied dataset: {invalid_ids}")
         if item.get("target_type") != "proposed_test_target":
             hard.append(f"{loc}: numeric/target test is missing the required 'proposed_test_target' label")
+        test_confidence = item.get("confidence")
+        if test_confidence not in ALLOWED_CONFIDENCE_LEVELS:
+            hard.append(f"{loc}: confidence must be one of {sorted(ALLOWED_CONFIDENCE_LEVELS)}, got {test_confidence!r}")
 
     return {"hard": hard, "soft": soft}
 
@@ -713,6 +760,17 @@ def main() -> int:
         print(f"FAILED: Could not obtain a valid, safe response from Claude: {last_error}")
         return 1
 
+    # Restore the null convention in the persisted file (0 -> null, "" -> null) even
+    # though the API schema used plain non-nullable types to keep the request simple -
+    # the on-disk contract is unchanged from before the schema simplification.
+    for group in ("content_opportunities", "strategy_themes", "recommended_formats", "recommended_tests"):
+        for item in claude_result.get(group, []):
+            if isinstance(item, dict):
+                if item.get("sample_size") == 0:
+                    item["sample_size"] = None
+                if item.get("verification_reason") == "":
+                    item["verification_reason"] = None
+
     output = {
         "metadata": {
             "agent": "content_strategy",
@@ -726,7 +784,7 @@ def main() -> int:
         "strategy_themes": claude_result.get("strategy_themes", []),
         "recommended_formats": claude_result.get("recommended_formats", []),
         "recommended_tests": claude_result.get("recommended_tests", []),
-        "action_plan": claude_result.get("action_plan", {"immediate": [], "next": [], "later": []}),
+        "action_plan": parse_action_plan(claude_result.get("action_plan", [])),
     }
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
