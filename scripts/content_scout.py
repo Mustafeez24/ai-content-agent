@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -94,55 +95,118 @@ def build_claude_payload(stage3: dict) -> dict:
     }
 
 
-CONTENT_SCOUT_SYSTEM_PROMPT = """You are the Content Scout Agent for FlyingFish Scuba School, \
-a PADI/SSI scuba diving school at Novotel Resort & Spa, Candolim, Goa, India.
+def known_post_ids(payload: dict) -> set:
+    """The only post_ids Claude was actually given evidence for - used to reject any
+    post_id Claude's response references that it was never shown."""
+    ids = {p["post_id"] for p in payload.get("top_posts", [])}
+    ids |= {p["post_id"] for p in payload.get("lowest_posts", [])}
+    return ids
+
+
+def _build_system_prompt() -> str:
+    today = datetime.now(timezone.utc).strftime("%B %Y")
+    return f"""You are the Content Scout Agent for FlyingFish Scuba School, \
+a scuba diving school at Novotel Resort & Spa, Candolim, Goa, India.
+
+The current date is {today}. Never reference or invent a specific past or future calendar \
+quarter (e.g. "Q4 2025") or a specific date you were not given - use relative planning \
+language instead, such as "the next 30 days" or "the next 4 weeks".
 
 Analyze the provided Instagram content-performance analysis, which was already computed by \
 a prior deterministic + Claude analysis pass. The top_posts and lowest_posts lists, and all \
 numeric engagement figures, are already correct and final - you must NOT recompute, \
-re-rank, contradict, or invent different engagement numbers or a different ranking.
+re-rank, contradict, or invent different engagement numbers, a different ranking, or any \
+post_id that was not given to you in top_posts, lowest_posts, or evidence_post_details.
 
-Your job is NOT to invent facts. Base recommendations primarily on the supplied analysis. \
-Separate observed patterns from recommendations. Do not claim that something is proven \
-when the dataset only suggests it - this is a small dataset (typically ~20 posts), so most \
-findings should be framed as low-to-medium confidence unless the evidence is unusually \
-consistent. Do not fabricate engagement numbers, posts, topics, or audience behavior. If \
-the dataset is insufficient to determine something, explicitly say so rather than guessing. \
-Prioritize actionable, practical recommendations for a scuba-diving business in Goa.
+EVIDENCE HIERARCHY - every claim must be classified as exactly one of:
+- "observed": a fact directly readable from the supplied dataset (a specific post's likes,
+  comments, caption, hashtags, or format).
+- "interpretation": a reasonable reading of observed data, but not a proven causal link
+  (e.g. "the strongest performer used testimonial framing").
+- "hypothesis": a proposed explanation or idea that would need testing to confirm.
+- "recommendation": an action suggested based on the evidence and/or hypothesis.
+Never upgrade a hypothesis into a stated fact.
+
+HARD RULES - violating any of these makes the report unsafe to publish:
+1. Never fabricate evidence, invent post_ids, or invent likes/comments/engagement numbers -
+   use only what is in the supplied data.
+2. Never claim causation ("drives", "causes", "proves", "guarantees") from this observational
+   Instagram data. Use hedged language: "appears associated with", "observed in", "present
+   among", "may be worth testing".
+3. Never make competitor claims (e.g. "no competitor does this", "competitors don't address
+   this") - no competitor data was supplied. If you want to mention a possible
+   differentiation angle, phrase it as: "This may represent a potential differentiation
+   opportunity; competitor validation is required" - and set requires_verification=true.
+4. Never state a business fact (certifications like PADI/SSI, partnerships, pricing,
+   guarantees, awards, affiliations, safety/market claims like "scam concerns in Goa") as
+   verified unless it was explicitly supplied to you as verified context - which it was not
+   in this run. If such a fact appears in a caption/hashtag and you reference it, set
+   requires_verification=true and explain what needs verification.
+5. When a claim rests on a small number of posts, state the sample size explicitly (e.g.
+   "2 of 20 posts") and avoid universal language ("always", "every post", "consistently") -
+   confidence should not be "high" when sample_size is 1 or 2.
+6. Any specific numeric target (likes, comments, watch-through %) you propose for future
+   content is a hypothesis to test, never a predicted outcome - it belongs only in
+   recommended_tests, framed as a proposed test target.
+7. If the dataset is insufficient to determine something, say so explicitly - prefer "not
+   established by this dataset" over speculation. Do not guess to fill a field.
 
 Respond with ONLY a single valid JSON object (no markdown code fences, no commentary before \
 or after) matching exactly this shape:
 
-{
-  "executive_summary": "<3-5 sentence plain-language summary for a marketing team>",
+{{
+  "executive_summary": "<3-5 sentence plain-language summary for a marketing team, using only observed/interpretation language>",
   "top_content_patterns": [
-    {"pattern": "...", "evidence": "...", "confidence": "high|medium|low", "recommendation": "..."}
+    {{"pattern": "...", "evidence": "...", "evidence_type": "observed|interpretation|hypothesis|recommendation", "evidence_post_ids": ["..."], "sample_size": 2, "confidence": "high|medium|low", "requires_verification": false, "verification_reason": null, "recommendation": "..."}}
   ],
   "top_performing_content_notes": [
-    {"post_id": "<must be one of the given top_posts post_ids>", "likely_reason": "...", "evidence": "..."}
+    {{"post_id": "<must be one of the given top_posts post_ids>", "likely_reason": "...", "evidence": "..."}}
   ],
   "weak_content_patterns": [
-    {"pattern": "...", "evidence": "...", "confidence": "high|medium|low"}
+    {{"pattern": "...", "evidence": "...", "evidence_type": "observed|interpretation|hypothesis|recommendation", "evidence_post_ids": ["..."], "sample_size": 2, "confidence": "high|medium|low", "requires_verification": false, "verification_reason": null}}
   ],
   "content_gaps": [
-    {"gap": "...", "evidence": "...", "confidence": "high|medium|low"}
+    {{"gap": "...", "evidence": "...", "evidence_type": "observed|interpretation|hypothesis|recommendation", "evidence_post_ids": ["..."], "sample_size": null, "confidence": "high|medium|low", "requires_verification": false, "verification_reason": null}}
   ],
   "opportunities": [
-    {"opportunity": "...", "rationale": "...", "confidence": "high|medium|low"}
+    {{"opportunity": "...", "rationale": "...", "evidence_type": "observed|interpretation|hypothesis|recommendation", "evidence_post_ids": ["..."], "sample_size": null, "confidence": "high|medium|low", "requires_verification": false, "verification_reason": null}}
   ],
   "recommended_tests": [
-    {"test": "...", "hypothesis": "...", "expected_signal": "..."}
+    {{"test": "...", "hypothesis": "...", "expected_signal": "...", "target_type": "proposed_test_target"}}
   ],
-  "action_plan": ["<concrete next step, ordered by priority>"]
-}
+  "action_plan": ["<concrete next step, ordered by priority, using relative timeframes only>"]
+}}
 
+For "evidence_post_ids", list only real post_ids you were given, or an empty array if the \
+claim is not tied to specific posts. For "sample_size", give the number of posts the claim \
+is actually based on (null if not applicable - e.g. a content gap about the whole dataset). \
+Set requires_verification=true whenever a claim touches a business fact, external \
+market/safety claim, or competitor comparison that was not supplied to you as verified \
+data, and explain what needs verification in verification_reason (otherwise null). \
 For "top_performing_content_notes", use ONLY the post_ids provided in top_posts - do not \
 introduce any other post_id. Keep every string field concise and specific to scuba diving \
 content in Goa, not generic social media advice."""
 
+
+CONTENT_SCOUT_SYSTEM_PROMPT = _build_system_prompt()
+
 # Passed via output_config.format (json_schema) so the API constrains generation to
 # schema-valid JSON directly - this closes off the whole class of "malformed JSON from
 # unescaped quotes/newlines/unicode" failures, independent of the truncation fix below.
+# Evidence fields shared by every pattern-level claim type (top_content_patterns,
+# weak_content_patterns, content_gaps, opportunities). Structurally required - not just
+# requested in the prompt - so Claude cannot omit evidence classification, sample size,
+# or the verification flag for any claim.
+_EVIDENCE_FIELDS = {
+    "evidence_type": {"type": "string", "enum": ["observed", "interpretation", "hypothesis", "recommendation"]},
+    "evidence_post_ids": {"type": "array", "items": {"type": "string"}},
+    "sample_size": {"type": ["integer", "null"]},
+    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    "requires_verification": {"type": "boolean"},
+    "verification_reason": {"type": ["string", "null"]},
+}
+_EVIDENCE_FIELD_NAMES = list(_EVIDENCE_FIELDS.keys())
+
 CONTENT_SCOUT_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -154,10 +218,10 @@ CONTENT_SCOUT_RESPONSE_SCHEMA = {
                 "properties": {
                     "pattern": {"type": "string"},
                     "evidence": {"type": "string"},
-                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                     "recommendation": {"type": "string"},
+                    **_EVIDENCE_FIELDS,
                 },
-                "required": ["pattern", "evidence", "confidence", "recommendation"],
+                "required": ["pattern", "evidence", "recommendation", *_EVIDENCE_FIELD_NAMES],
                 "additionalProperties": False,
             },
         },
@@ -181,9 +245,9 @@ CONTENT_SCOUT_RESPONSE_SCHEMA = {
                 "properties": {
                     "pattern": {"type": "string"},
                     "evidence": {"type": "string"},
-                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                    **_EVIDENCE_FIELDS,
                 },
-                "required": ["pattern", "evidence", "confidence"],
+                "required": ["pattern", "evidence", *_EVIDENCE_FIELD_NAMES],
                 "additionalProperties": False,
             },
         },
@@ -194,9 +258,9 @@ CONTENT_SCOUT_RESPONSE_SCHEMA = {
                 "properties": {
                     "gap": {"type": "string"},
                     "evidence": {"type": "string"},
-                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                    **_EVIDENCE_FIELDS,
                 },
-                "required": ["gap", "evidence", "confidence"],
+                "required": ["gap", "evidence", *_EVIDENCE_FIELD_NAMES],
                 "additionalProperties": False,
             },
         },
@@ -207,9 +271,9 @@ CONTENT_SCOUT_RESPONSE_SCHEMA = {
                 "properties": {
                     "opportunity": {"type": "string"},
                     "rationale": {"type": "string"},
-                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                    **_EVIDENCE_FIELDS,
                 },
-                "required": ["opportunity", "rationale", "confidence"],
+                "required": ["opportunity", "rationale", *_EVIDENCE_FIELD_NAMES],
                 "additionalProperties": False,
             },
         },
@@ -221,8 +285,9 @@ CONTENT_SCOUT_RESPONSE_SCHEMA = {
                     "test": {"type": "string"},
                     "hypothesis": {"type": "string"},
                     "expected_signal": {"type": "string"},
+                    "target_type": {"type": "string", "enum": ["proposed_test_target"]},
                 },
-                "required": ["test", "hypothesis", "expected_signal"],
+                "required": ["test", "hypothesis", "expected_signal", "target_type"],
                 "additionalProperties": False,
             },
         },
@@ -251,7 +316,7 @@ class TruncatedResponseError(Exception):
     """Raised when Claude's response was cut off by the token limit before completing."""
 
 
-def call_claude(api_key: str, payload: dict, max_tokens: int = BASE_MAX_TOKENS) -> tuple:
+def call_claude(api_key: str, payload: dict, max_tokens: int = BASE_MAX_TOKENS, extra_note: str = None) -> tuple:
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -260,6 +325,8 @@ def call_claude(api_key: str, payload: dict, max_tokens: int = BASE_MAX_TOKENS) 
         "Instagram account. Rankings and numbers are already final - interpret them, "
         "do not recompute.\n\n" + json.dumps(payload, ensure_ascii=False)
     )
+    if extra_note:
+        user_message += f"\n\nCORRECTION REQUIRED: {extra_note}"
 
     response = client.messages.create(
         model=MODEL,
@@ -359,6 +426,154 @@ def validate_scout_response(data) -> None:
         raise DataError(f"Claude's response has the wrong type for field(s): {wrong_type}")
 
 
+# Mechanical, regex-based safety checks against the response's actual text content -
+# structural safeguards, not just prompt instructions. "Hard" violations mean the claim
+# itself is unsafe as worded and must be retried/rejected; "soft" violations are missing
+# metadata that can be safely auto-corrected without discarding the claim.
+_CAUSAL_VERBS_RE = re.compile(r"\b(drives?|causes?|proves?|guarantees?)\b", re.IGNORECASE)
+_COMPETITOR_RE = re.compile(r"\bcompetitors?\b", re.IGNORECASE)
+_COMPETITOR_HEDGE_RE = re.compile(
+    r"\b(requires?\s+verification|validation\s+is\s+required|competitor\s+validation)\b", re.IGNORECASE
+)
+_CALENDAR_PERIOD_RE = re.compile(r"\bQ[1-4]\s*20\d{2}\b|\b20\d{2}\s*Q[1-4]\b", re.IGNORECASE)
+_BUSINESS_FACT_RE = re.compile(
+    r"\b(PADI|SSI|certifi\w*|award\w*|partnership\w*|licens\w*|guarantee\w*|scam\w*|"
+    r"safety\s+concern\w*|tourist\s+market\w*)\b",
+    re.IGNORECASE,
+)
+_UNIVERSAL_LANGUAGE_RE = re.compile(
+    r"\b(always|every\s+post|all\s+posts|consistently\s+performs?|guaranteed)\b", re.IGNORECASE
+)
+
+_EVIDENCE_GROUPS = [
+    ("top_content_patterns", "pattern"),
+    ("weak_content_patterns", "pattern"),
+    ("content_gaps", "gap"),
+    ("opportunities", "opportunity"),
+]
+
+
+def _iter_text_fields(data: dict):
+    """Yield (location, text) for every free-text string field in a response."""
+    yield "executive_summary", data.get("executive_summary", "")
+
+    for i, item in enumerate(data.get("top_content_patterns", [])):
+        for field in ("pattern", "evidence", "recommendation"):
+            yield f"top_content_patterns[{i}].{field}", item.get(field, "")
+    for i, item in enumerate(data.get("weak_content_patterns", [])):
+        for field in ("pattern", "evidence"):
+            yield f"weak_content_patterns[{i}].{field}", item.get(field, "")
+    for i, item in enumerate(data.get("content_gaps", [])):
+        for field in ("gap", "evidence"):
+            yield f"content_gaps[{i}].{field}", item.get(field, "")
+    for i, item in enumerate(data.get("opportunities", [])):
+        for field in ("opportunity", "rationale"):
+            yield f"opportunities[{i}].{field}", item.get(field, "")
+    for i, item in enumerate(data.get("recommended_tests", [])):
+        for field in ("test", "hypothesis", "expected_signal"):
+            yield f"recommended_tests[{i}].{field}", item.get(field, "")
+    for i, item in enumerate(data.get("top_performing_content_notes", [])):
+        for field in ("likely_reason", "evidence"):
+            yield f"top_performing_content_notes[{i}].{field}", item.get(field, "")
+    for i, text in enumerate(data.get("action_plan", [])):
+        yield f"action_plan[{i}]", text
+
+
+def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
+    """Check response content against the hardening rules.
+    Returns {"hard": [str, ...], "soft": [{"loc", "type", "detail"}, ...]}."""
+    hard = []
+    soft = []
+
+    for location, text in _iter_text_fields(data):
+        if not isinstance(text, str):
+            continue
+        if _CAUSAL_VERBS_RE.search(text):
+            hard.append(
+                f"{location}: uses causal language ('drives'/'causes'/'proves'/'guarantees') "
+                f"not supported by observational data: {text!r}"
+            )
+        if _COMPETITOR_RE.search(text) and not _COMPETITOR_HEDGE_RE.search(text):
+            hard.append(
+                f"{location}: makes a competitor claim without competitor data and without "
+                f"hedged 'validation required' phrasing: {text!r}"
+            )
+        if _CALENDAR_PERIOD_RE.search(text):
+            hard.append(
+                f"{location}: contains a hardcoded calendar quarter/year instead of relative "
+                f"planning language: {text!r}"
+            )
+
+    for group_name, label_field in _EVIDENCE_GROUPS:
+        for i, item in enumerate(data.get(group_name, [])):
+            if not isinstance(item, dict):
+                continue
+            loc = f"{group_name}[{i}]"
+
+            evidence_post_ids = item.get("evidence_post_ids") or []
+            invalid_ids = [pid for pid in evidence_post_ids if pid not in valid_post_ids]
+            if invalid_ids:
+                hard.append(f"{loc}: evidence_post_ids references post_id(s) not in the supplied dataset: {invalid_ids}")
+
+            sample_size = item.get("sample_size")
+            confidence = item.get("confidence")
+            requires_verification = bool(item.get("requires_verification", False))
+            combined_text = " ".join(str(item.get(f, "")) for f in (label_field, "evidence", "rationale") if f in item)
+
+            if sample_size is not None and sample_size <= 2 and confidence == "high":
+                soft.append(
+                    {
+                        "loc": loc,
+                        "type": "confidence_downgrade",
+                        "detail": f"confidence 'high' with sample_size={sample_size} is not justified - downgraded to 'medium'",
+                    }
+                )
+
+            if sample_size is not None and sample_size <= 2 and not requires_verification and _UNIVERSAL_LANGUAGE_RE.search(combined_text):
+                soft.append(
+                    {
+                        "loc": loc,
+                        "type": "flag_verification",
+                        "detail": f"uses universal language ('always'/'every'/'consistently') with a small sample_size={sample_size}",
+                    }
+                )
+
+            if not requires_verification and _BUSINESS_FACT_RE.search(combined_text):
+                soft.append(
+                    {
+                        "loc": loc,
+                        "type": "flag_verification",
+                        "detail": "references a business/external fact (certification, award, safety/market claim, etc.) not supplied as verified context",
+                    }
+                )
+
+    return {"hard": hard, "soft": soft}
+
+
+def apply_auto_corrections(data: dict, violations: dict) -> int:
+    """Apply soft-violation corrections in place (confidence downgrade, forcing
+    requires_verification=true with an explanation). Returns the number applied."""
+    count = 0
+    soft_by_loc = {}
+    for v in violations["soft"]:
+        soft_by_loc.setdefault(v["loc"], []).append(v)
+
+    for group_name, _ in _EVIDENCE_GROUPS:
+        for i, item in enumerate(data.get(group_name, [])):
+            loc = f"{group_name}[{i}]"
+            for v in soft_by_loc.get(loc, []):
+                if v["type"] == "confidence_downgrade" and item.get("confidence") == "high":
+                    item["confidence"] = "medium"
+                    count += 1
+                elif v["type"] == "flag_verification" and not item.get("requires_verification"):
+                    item["requires_verification"] = True
+                    existing = item.get("verification_reason")
+                    note = f"auto-flagged: {v['detail']}"
+                    item["verification_reason"] = f"{existing}; {note}" if existing else note
+                    count += 1
+    return count
+
+
 def assemble_top_performing_content(top_posts: list, claude_notes: list) -> list:
     """Merge Stage 3's deterministic top_posts with Claude's interpretation, keyed by
     post_id. Deterministic fields always come from Stage 3 - never from Claude."""
@@ -453,12 +668,16 @@ def main() -> int:
     claude_result = None
     response = None
     last_error = None
+    extra_note = None
+    valid_post_ids = known_post_ids(payload)
 
     # At most two Claude calls total: one normal attempt, one retry only if the first
-    # was truncated (higher max_tokens) or returned unparseable/invalid JSON.
+    # was truncated (higher max_tokens), returned unparseable/invalid JSON, or violated
+    # an evidence-safety rule (fabricated post_id, causal claim, unhedged competitor
+    # claim, hardcoded calendar period).
     for attempt, max_tokens in enumerate([BASE_MAX_TOKENS, RETRY_MAX_TOKENS], start=1):
         try:
-            text, response = call_claude(api_key, payload, max_tokens=max_tokens)
+            text, response = call_claude(api_key, payload, max_tokens=max_tokens, extra_note=extra_note)
         except TruncatedResponseError as e:
             last_error = str(e)
             if attempt == 1:
@@ -475,17 +694,44 @@ def main() -> int:
         try:
             claude_result = extract_json_object(text)
             validate_scout_response(claude_result)
-            break
         except (json.JSONDecodeError, DataError) as e:
             last_error = str(e)
+            claude_result = None
             if attempt == 1:
                 print(f"Claude's response was invalid ({e}) - retrying once with max_tokens={RETRY_MAX_TOKENS}...")
+                extra_note = f"Your previous response was invalid ({e}). Return ONLY the corrected JSON object."
                 continue
             print(f"FAILED: Claude did not return a valid, complete response after retry: {last_error}")
             return 1
 
+        violations = find_evidence_violations(claude_result, valid_post_ids)
+        if violations["hard"]:
+            last_error = "; ".join(violations["hard"])
+            if attempt == 1:
+                print("Claude's response violated evidence-safety rules - retrying once:")
+                for v in violations["hard"]:
+                    print(f"  - {v}")
+                extra_note = (
+                    "Your previous response violated the evidence-safety rules and cannot be "
+                    "published as-is. Fix these specific issues: " + " | ".join(violations["hard"])
+                )
+                claude_result = None
+                continue
+            print("FAILED: Claude's response still violates evidence-safety rules after retry:")
+            for v in violations["hard"]:
+                print(f"  - {v}")
+            return 1
+
+        applied = apply_auto_corrections(claude_result, violations)
+        if applied:
+            print(
+                f"Applied {applied} automatic evidence-safety correction(s) "
+                "(flagged unverified claims and/or downgraded overconfident small-sample findings)."
+            )
+        break
+
     if claude_result is None:
-        print(f"FAILED: Could not obtain a valid response from Claude: {last_error}")
+        print(f"FAILED: Could not obtain a valid, safe response from Claude: {last_error}")
         return 1
 
     top_performing_content = assemble_top_performing_content(
