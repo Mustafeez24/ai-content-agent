@@ -664,6 +664,141 @@ class TestRealRunFailureRegression(unittest.TestCase):
         self.assertEqual(violations["hard"], [])
 
 
+# --- Stage 6.3: false-positive reduction. The real Stage 4.1-driven run rejected
+# grammatically safe wording - compound adjectives ("scarcity-driven booking
+# windows"), a post's own already-observed metrics ("generating 3,266 likes"), a
+# verb-tense gap in the hedge regex ("tests whether" vs. only "test whether"), and a
+# test-design field using "Track..." without the literal word "whether"
+# ("Track DM inquiry volume for increase week-over-week"). This class locks in the 20
+# explicit cases from that hardening pass, using find_evidence_violations() directly
+# on minimal fixtures so each case tests exactly one thing.
+class TestFalsePositiveReduction(unittest.TestCase):
+    def _opportunity_violation(self, text):
+        resp = make_strategy_response(opportunity_overrides={"evidence": text})
+        return strat.find_evidence_violations(resp, VALID_POST_IDS)["hard"]
+
+    def _test_field_violation(self, field, text):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0][field] = text
+        return strat.find_evidence_violations(resp, VALID_POST_IDS)["hard"]
+
+    # 1-5: observational claims must remain violations
+    def test_1_drives_engagement_is_violation(self):
+        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("This drives engagement.")))
+
+    def test_2_primary_driver_of_engagement_is_violation(self):
+        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("This is the primary driver of engagement.")))
+
+    def test_3_drove_engagement_is_violation(self):
+        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("This drove engagement.")))
+
+    def test_4_generated_bookings_is_violation(self):
+        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("This generated bookings.")))
+
+    def test_5_increased_bookings_is_violation(self):
+        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("This increased bookings.")))
+
+    # 6-9: compound adjectives must not be flagged
+    def test_6_scarcity_driven_booking_windows_allowed(self):
+        self.assertEqual(self._opportunity_violation("Scarcity-driven booking windows aligned with the season."), [])
+
+    def test_7_narrative_driven_reels_allowed(self):
+        self.assertEqual(self._opportunity_violation("Narrative-driven reels featuring career transformation."), [])
+
+    def test_8_weather_driven_dive_conditions_allowed(self):
+        self.assertEqual(self._opportunity_violation("Weather-driven dive conditions are mentioned in captions."), [])
+
+    def test_9_urgency_driven_cta_allowed(self):
+        self.assertEqual(self._opportunity_violation("Urgency-driven CTAs appear in the top post."), [])
+
+    # 10-13: test-design/success-metric framings must be allowed
+    def test_10_test_whether_bookings_increase_allowed(self):
+        self.assertEqual(self._test_field_violation("hypothesis", "Test whether bookings increase after this change."), [])
+
+    def test_11_measure_whether_inquiries_increase_compared_to_baseline_allowed(self):
+        self.assertEqual(
+            self._test_field_violation("success_metric", "Measure whether inquiries increase compared to baseline."), []
+        )
+
+    def test_12_track_dm_inquiry_volume_for_increase_week_over_week_allowed(self):
+        self.assertEqual(
+            self._test_field_violation("success_metric", "Track DM inquiry volume for increase week-over-week during test."),
+            [],
+        )
+
+    def test_13_target_20_percent_increase_vs_baseline_allowed(self):
+        self.assertEqual(self._test_field_violation("success_metric", "Target: 20% increase vs baseline"), [])
+
+    # 14-16: retrospective/proven claims must remain violations even in test-design fields
+    def test_14_campaign_increased_bookings_is_violation(self):
+        self.assertTrue(
+            any("causal" in v.lower() for v in self._test_field_violation("success_metric", "The campaign increased bookings."))
+        )
+
+    def test_15_campaign_generated_bookings_is_violation(self):
+        self.assertTrue(
+            any("causal" in v.lower() for v in self._test_field_violation("hypothesis", "The campaign generated bookings."))
+        )
+
+    def test_16_test_proved_an_increase_is_violation(self):
+        self.assertTrue(
+            any("causal" in v.lower() for v in self._test_field_violation("evidence_basis", "The test proved an increase in bookings."))
+        )
+
+    # 17-18: describing a post's own already-observed metrics must be allowed
+    def test_17_has_likes_and_comments_allowed(self):
+        self.assertEqual(self._opportunity_violation("DWyk4T6E5OF has 3,266 likes and 49 comments."), [])
+
+    def test_18_generating_likes_and_comments_allowed(self):
+        self.assertEqual(
+            self._opportunity_violation("DWyk4T6E5OF, generating 3,266 likes and 49 comments, shows strong engagement."), []
+        )
+
+    # 19-20: competitor claim protection stays, but requires_verification=true + a
+    # real verification_reason is now an accepted alternative to rewriting the text.
+    def test_19_competitor_statement_without_verification_is_protected(self):
+        resp = make_strategy_response(
+            opportunity_overrides={
+                "rationale": "No competitor addresses this angle.",
+                "requires_verification": False,
+            }
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
+
+    def test_20_competitor_statement_with_verification_is_allowed(self):
+        resp = make_strategy_response(
+            opportunity_overrides={
+                "rationale": "No competitor addresses this angle.",
+                "requires_verification": True,
+                "verification_reason": "No competitor dataset was supplied; needs manual research.",
+            }
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    # Real production failures, verbatim, as an end-to-end sanity check beyond the
+    # word-level cases above.
+    def test_real_failure_tests_whether_verb_form_is_allowed(self):
+        text = (
+            "This format tests whether dedicating content to specific instructors "
+            "strengthens trust signals and drives repeat-viewer familiarity with the "
+            "FlyingFish team."
+        )
+        self.assertEqual(self._opportunity_violation(text), [])
+
+    def test_real_failure_driving_advance_bookings_remains_violation(self):
+        # This one is a genuine unsupported claim (bookings, not an engagement metric,
+        # with no test framing) and must still be rejected - not every real-run
+        # failure was a false positive.
+        text = (
+            "Seasonal countdown messaging is associated with notably high comment "
+            "engagement and community anticipation, driving advance bookings during "
+            "seasonal transitions."
+        )
+        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation(text)))
+
+
 # --- error message extraction (Step 2 fix: real Anthropic error, never a bare status) ---
 class TestApiErrorMessageExtraction(unittest.TestCase):
     def test_extracts_message_from_body_error_dict(self):

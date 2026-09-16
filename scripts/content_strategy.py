@@ -144,6 +144,17 @@ be worth testing".
   dedicated instructor content is associated with stronger engagement."
   Bad: "This format has driven stronger saves in the sample."
   Good: "This format is associated with stronger saves in the observed sample."
+  Bad: "...driving advance bookings during seasonal transitions."
+  Good: "...is associated with notably high comment engagement; test whether this
+  format is associated with a change in advance booking inquiries."
+
+Compound adjectives like "scarcity-driven", "narrative-driven", "weather-driven",
+"urgency-driven" are fine wherever they naturally read - they describe content
+characteristics, not a claim that the dataset proved causation. A hyphenated
+"X-driven <noun>" is not covered by the drives/driven restriction above. Likewise,
+describing a specific post's own already-observed numbers ("generating 3,266 likes
+and 49 comments", "has 3,266 likes") is fine - that is not a causal claim, it is
+citing Stage 4.1's own verified numbers for that post_id.
 
 For recommended_tests' "test_name"/"hypothesis"/"variable_to_test"/"success_metric" -
 the fields that describe a test that has NOT been run yet - phrase every claim as a
@@ -171,6 +182,14 @@ differentiation angle; competitor validation required" or "could be tested as a
 differentiation angle, but competitor data is required before making comparative
 claims" - and set requires_verification=true with a verification_reason explaining
 that competitor data is needed.
+  Bad: "FlyingFish's structured, professional positioning (vs. unstructured
+  competitors) is a differentiation opportunity."
+  Good: "FlyingFish's structured, professional positioning may be a potential
+  differentiation angle; competitor validation required." (with
+  requires_verification=true and a verification_reason explaining why)
+If you reference competitors at all without rewriting into that hedged phrasing, you
+MUST set requires_verification=true and write a real verification_reason - an
+unhedged competitor mention with requires_verification left false is always rejected.
 
 BUSINESS OUTCOME CLAIMS - the supplied dataset contains Instagram engagement
 observations only. It does NOT establish bookings, booking conversions, revenue,
@@ -569,24 +588,78 @@ _STRONG_CLAIM_RE = re.compile(
     r"|\bengagement\s+drivers?\b",
     re.IGNORECASE,
 )
-_WHETHER_HEDGE_RE = re.compile(
-    r"\b(test|measure|compare|evaluate|track|assess|determine)\s+whether\b", re.IGNORECASE
+# Every inflected form of the hedge verbs, not just the bare infinitive - a real
+# response phrased "This format TESTS whether..." was rejected because the old regex
+# only matched the literal word "test", not "tests".
+_HEDGE_VERB_FORMS = (
+    r"test|tests|tested|testing|measure|measures|measured|measuring|"
+    r"compare|compares|compared|comparing|evaluate|evaluates|evaluated|evaluating|"
+    r"track|tracks|tracked|tracking|assess|assesses|assessed|assessing|"
+    r"determine|determines|determined|determining"
 )
+_WHETHER_HEDGE_RE = re.compile(rf"\b(?:{_HEDGE_VERB_FORMS})\s+whether\b", re.IGNORECASE)
 # Additional framings accepted ONLY in test-design fields (hypothesis, success_metric,
 # variable_to_test, test_name) - these fields inherently describe a proposed test's
 # design/target rather than a claim about what the dataset already showed, so
 # comparative/target language ("compared to baseline", "target: +15%", "than the
 # control group") is itself sufficient framing without also requiring "... whether".
+# "track"/"evaluate" are also included bare (not just "track whether") since rule B's
+# own list of allowed test-design language ("Track...", "Evaluate...") uses them that
+# way, e.g. "Track DM inquiry volume for increase week-over-week during test."
 _TEST_FRAMING_HEDGE_RE = re.compile(
     r"\btarget(?:s|ed|ing)?\s*:?\b"
     r"|\bsuccess\s+if\b"
     r"|\bcompar(?:e|es|ed|ing)\b"
+    r"|\btrack(?:s|ed|ing)?\b"
+    r"|\bevaluat(?:e|es|ed|ing)\b"
     r"|\brelative\s+to\b"
     r"|\bversus\b|\bvs\.?\b"
-    r"|\bthan\b",
+    r"|\bthan\b"
+    r"|\bweek[\s-]over[\s-]week\b",
     re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+# A trend word immediately preceded by a hyphen is a compound adjective describing
+# content characteristics ("scarcity-driven booking windows", "narrative-driven
+# reels", "weather-driven dive conditions", "urgency-driven CTAs"), not a claim that
+# the dataset showed causation - it should never be flagged on its own.
+def _is_compound_adjective(sentence: str, start: int) -> bool:
+    return start > 0 and sentence[start - 1] == "-"
+
+
+# A trend word describing a post's OWN already-observed engagement numbers
+# ("generating 3,266 likes and 49 comments") is a grammatical participle, not a claim
+# that the format/content caused an external outcome - the number itself is exactly
+# what Stage 4.1 already verified. Deliberately scoped to engagement-metric nouns only
+# (likes/comments/shares/saves/views/followers/reactions), NOT bookings/inquiries/
+# conversions/revenue - "generated bookings" or "increased inquiries" must still be
+# flagged, since those business outcomes are never established by this dataset.
+_METRIC_DESCRIPTION_RE = re.compile(
+    r"\b(?:generat(?:e|es|ed|ing)|driv(?:e|es|ing)|drove|result(?:s|ed|ing)?\s+in)\s+"
+    r"[\d,]+(?:\.\d+)?%?\s+(?:likes?|comments?|shares?|saves?|views?|followers?|reactions?)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_metric_description(sentence: str, start: int, end: int) -> bool:
+    for m in _METRIC_DESCRIPTION_RE.finditer(sentence):
+        if m.start() <= start and end <= m.end():
+            return True
+    return False
+
+
+def _first_real_match(pattern, sentence: str):
+    """Like pattern.search(), but skips matches that are compound adjectives or part
+    of an observed-metric description (see the two helpers above) - neither is a
+    causal claim, so continue scanning the rest of the sentence for a real one."""
+    for m in pattern.finditer(sentence):
+        if _is_compound_adjective(sentence, m.start()):
+            continue
+        if _is_metric_description(sentence, m.start(), m.end()):
+            continue
+        return m
+    return None
 
 _COMPETITOR_RE = re.compile(r"\bcompetitors?\b", re.IGNORECASE)
 _COMPETITOR_HEDGE_RE = re.compile(
@@ -620,7 +693,7 @@ def _causal_language_match(text: str, is_test_field: bool = False):
     """Return (matched_phrase, sentence) for the first unsupported causal-language use
     in text, or None if there isn't one. See the tier comment above _TREND_PRESENT_RE."""
     for sentence in _sentences(text):
-        m = _TREND_PAST_RE.search(sentence)
+        m = _first_real_match(_TREND_PAST_RE, sentence)
         if m:
             return m.group(0), sentence
 
@@ -628,7 +701,7 @@ def _causal_language_match(text: str, is_test_field: bool = False):
             is_test_field and bool(_TEST_FRAMING_HEDGE_RE.search(sentence))
         )
 
-        m = _TREND_PRESENT_RE.search(sentence)
+        m = _first_real_match(_TREND_PRESENT_RE, sentence)
         if m and not hedged:
             return m.group(0), sentence
 
@@ -668,28 +741,42 @@ _GROUP_TEXT_FIELDS = {
 
 
 def _iter_text_fields(data: dict):
-    """Yield (location, text, is_test_field) for every free-text string field in a
-    response - every claim-bearing field across every item, not a hardcoded list of
+    """Yield (location, text, is_test_field, item) for every free-text string field in
+    a response - every claim-bearing field across every item, not a hardcoded list of
     specific indexes. is_test_field marks fields whose entire purpose is describing a
-    not-yet-run test (see _causal_language_match)."""
-    yield "executive_summary", data.get("executive_summary", ""), False
+    not-yet-run test (see _causal_language_match). item is the owning dict (for the
+    competitor-claim requires_verification check below), or None for executive_summary/
+    action_plan, which aren't part of an item and so can't carry that flag."""
+    yield "executive_summary", data.get("executive_summary", ""), False, None
 
     for i, item in enumerate(data.get("content_opportunities", [])):
         for field in _CONTENT_OPPORTUNITIES_TEXT_FIELDS:
-            yield f"content_opportunities[{i}].{field}", item.get(field, ""), False
+            yield f"content_opportunities[{i}].{field}", item.get(field, ""), False, item
     for i, item in enumerate(data.get("strategy_themes", [])):
         for field in _STRATEGY_THEMES_TEXT_FIELDS:
-            yield f"strategy_themes[{i}].{field}", item.get(field, ""), False
+            yield f"strategy_themes[{i}].{field}", item.get(field, ""), False, item
     for i, item in enumerate(data.get("recommended_formats", [])):
         for field in _RECOMMENDED_FORMATS_TEXT_FIELDS:
-            yield f"recommended_formats[{i}].{field}", item.get(field, ""), False
+            yield f"recommended_formats[{i}].{field}", item.get(field, ""), False, item
     for i, item in enumerate(data.get("recommended_tests", [])):
         for field in _RECOMMENDED_TESTS_LENIENT_FIELDS:
-            yield f"recommended_tests[{i}].{field}", item.get(field, ""), True
+            yield f"recommended_tests[{i}].{field}", item.get(field, ""), True, item
         for field in _RECOMMENDED_TESTS_STRICT_FIELDS:
-            yield f"recommended_tests[{i}].{field}", item.get(field, ""), False
+            yield f"recommended_tests[{i}].{field}", item.get(field, ""), False, item
     for i, text in enumerate(data.get("action_plan", [])):
-        yield f"action_plan[{i}]", text, False
+        yield f"action_plan[{i}]", text, False, None
+
+
+def _competitor_claim_is_verified(item) -> bool:
+    """True when the item has explicitly flagged its competitor mention for human
+    verification (requires_verification=true with a real explanation) - the "auto-set
+    requires_verification=true with a clear verification_reason" alternative to
+    rewriting, called out explicitly for this hardening pass. executive_summary/
+    action_plan have no item to carry this flag, so they can never use this escape
+    valve - a competitor mention there must be hedged in the text itself."""
+    if not isinstance(item, dict):
+        return False
+    return bool(item.get("requires_verification")) and bool(str(item.get("verification_reason") or "").strip())
 
 
 def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
@@ -698,7 +785,7 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
     hard = []
     soft = []
 
-    for location, text, is_test_field in _iter_text_fields(data):
+    for location, text, is_test_field, item in _iter_text_fields(data):
         if not isinstance(text, str):
             continue
         causal = _causal_language_match(text, is_test_field=is_test_field)
@@ -708,10 +795,15 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
                 f"{location}: uses unsupported causal language ({phrase!r}) - state "
                 f"association or a testable hypothesis instead of causation: {sentence!r}"
             )
-        if _COMPETITOR_RE.search(text) and not _COMPETITOR_HEDGE_RE.search(text):
+        if (
+            _COMPETITOR_RE.search(text)
+            and not _COMPETITOR_HEDGE_RE.search(text)
+            and not _competitor_claim_is_verified(item)
+        ):
             hard.append(
-                f"{location}: makes a competitor claim without competitor data and without "
-                f"hedged 'validation required' phrasing: {text!r}"
+                f"{location}: makes a competitor claim without competitor data, without hedged "
+                f"'validation required' phrasing, and without requires_verification=true + a "
+                f"verification_reason: {text!r}"
             )
         if _CALENDAR_PERIOD_RE.search(text):
             hard.append(
