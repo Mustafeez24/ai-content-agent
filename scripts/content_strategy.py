@@ -147,14 +147,39 @@ be worth testing".
   Bad: "...driving advance bookings during seasonal transitions."
   Good: "...is associated with notably high comment engagement; test whether this
   format is associated with a change in advance booking inquiries."
+  Bad: "Instructor quality appears as the primary engagement driver in the
+  top-performing post." / "...as a documented engagement driver in top testimonials."
+  Good: "The top-performing post combines instructor praise with 3,266 likes and 49
+  comments." / "Instructor praise is a recurring feature of the strongest testimonial
+  evidence."
+  Bad: "...are proven to drive high engagement and conversion-oriented audience
+  response."
+  Good: "...received 1,119 likes and used time-limited discount messaging with a
+  direct CTA. This is an observed example to test in future promotional content."
+  Bad: "...and drives notably high comment ratio (5.5% engagement)."
+  Good: "...used countdown messaging for seasonal reopening, with a reported 5.5%
+  engagement rate and a comment ratio notably above the sample average."
+  Bad: "Site-specific content increases location specificity and SEO value."
+  Good: "Site-specific content adds explicit location information to the post. Its
+  effect on SEO performance should be treated as a hypothesis and measured."
+Never use "driver"/"drivers" as a noun to describe a factor at all in these fields -
+not "primary driver", not "engagement driver", not "top driver", not "documented
+driver" - in any phrasing. This applies to evidence_basis just as much as
+rationale/evidence: it must justify a proposed test using only already-observed
+numbers and associative language, never "driver" language or an unhedged
+drives/generates/increases claim.
 
 Compound adjectives like "scarcity-driven", "narrative-driven", "weather-driven",
-"urgency-driven" are fine wherever they naturally read - they describe content
-characteristics, not a claim that the dataset proved causation. A hyphenated
-"X-driven <noun>" is not covered by the drives/driven restriction above. Likewise,
-describing a specific post's own already-observed numbers ("generating 3,266 likes
-and 49 comments", "has 3,266 likes") is fine - that is not a causal claim, it is
-citing Stage 4.1's own verified numbers for that post_id.
+"urgency-driven", "data-driven", "location-driven" are fine wherever they naturally
+read - they describe content characteristics, not a claim that the dataset proved
+causation. A hyphenated "X-driven <noun>" is not covered by the drives/driven
+restriction above. Likewise, describing a specific post's own already-observed
+numbers ("generating 3,266 likes and 49 comments", "has 3,266 likes", "received 1,119
+likes") is fine - that is not a causal claim, it is citing Stage 4.1's own verified
+numbers for that post_id. This does NOT extend to bookings, revenue, leads,
+conversions, customer acquisition, enrollment, ROI, or inquiry quality - "generated
+bookings" or "increased inquiries" is still a forbidden unsupported claim, because
+those outcomes are never established by this dataset.
 
 For recommended_tests' "test_name"/"hypothesis"/"variable_to_test"/"success_metric" -
 the fields that describe a test that has NOT been run yet - phrase every claim as a
@@ -172,6 +197,11 @@ that claims a result the Instagram dataset does not contain.
   Bad (success_metric): "Engagement increased." / "This generated more bookings."
   Good (success_metric): "Measure whether likes increase by 15% compared to the
   sample average." or "Target: 15% more saves than the comparison group."
+  Good (variable_to_test): "Compare generic testimonials without instructor identity
+  against named-instructor content, and measure whether specific-instructor inquiries
+  differ between the two." (the "whether" clause does not need to sit immediately
+  after "measure"/"test" - "Compare A and B, and measure whether C" is a valid single
+  proposed test)
 
 COMPETITOR CLAIMS - the Stage 4.1 report contains FlyingFish data only, never actual
 competitor data. Do NOT claim things like "FlyingFish differentiates from
@@ -187,9 +217,25 @@ that competitor data is needed.
   Good: "FlyingFish's structured, professional positioning may be a potential
   differentiation angle; competitor validation required." (with
   requires_verification=true and a verification_reason explaining why)
+  Bad: "...may differentiate FlyingFish from competitors positioned only for
+  experienced divers." (adding "may" does NOT make an unverified claim about how
+  competitors are positioned acceptable - you do not have that data)
+  Good: "Systematizing this format addresses a documented core audience concern. Any
+  differentiation from competitors requires competitor research and validation."
+  Bad (target_audience): "...potential bookers evaluating FlyingFish against
+  competitors."
+  Good (target_audience): "...potential bookers evaluating training options." (drop
+  the competitor comparison entirely - target_audience describes FlyingFish's
+  audience, not a competitive claim)
+  Bad: "Goa's competitive scuba market likely drives prospective customer hesitation
+  and trust barriers."
+  Good: "The current dataset does not establish competitor positioning or customer
+  hesitation. Any trust-barrier or competitive-market hypothesis requires external
+  market research." (set requires_verification=true with a verification_reason)
 If you reference competitors at all without rewriting into that hedged phrasing, you
 MUST set requires_verification=true and write a real verification_reason - an
-unhedged competitor mention with requires_verification left false is always rejected.
+unhedged competitor mention with requires_verification left false is always rejected,
+regardless of hedge words like "may" or "likely" attached to it.
 
 BUSINESS OUTCOME CLAIMS - the supplied dataset contains Instagram engagement
 observations only. It does NOT establish bookings, booking conversions, revenue,
@@ -582,12 +628,13 @@ _TREND_PAST_RE = re.compile(
 )
 _STRONG_CLAIM_RE = re.compile(
     r"\b(causes?|causing|caused)\b"
-    r"|\b(proves?|proving|proved)\b"
+    r"|\b(proves?|proving|proved|proven)\b"
     r"|\b(guarantees?|guaranteeing|guaranteed)\b"
     r"|\bprimary\s+(?:engagement\s+)?drivers?\b"
     r"|\bengagement\s+drivers?\b",
     re.IGNORECASE,
 )
+_BARE_WHETHER_RE = re.compile(r"\bwhether\b", re.IGNORECASE)
 # Every inflected form of the hedge verbs, not just the bare infinitive - a real
 # response phrased "This format TESTS whether..." was rejected because the old regex
 # only matched the literal word "test", not "tests".
@@ -689,6 +736,40 @@ def _sentences(text: str) -> list:
     return parts or [text]
 
 
+def _whether_hedged(sentence: str, is_test_field: bool) -> bool:
+    """Hedge check for STRONG_CLAIM words (causes/proves/guarantees/primary driver) -
+    always requires an explicit 'whether' framing. In test-design fields, the hedge
+    verb doesn't need to sit immediately next to 'whether': a real response phrased
+    "...generic testimonials) and whether named instructor content generates
+    request-for-specific-instructor inquiries" is a valid compound test description
+    ("Compare A and B, and [determine] whether C") where the governing verb is earlier
+    in the sentence, not adjacent to "whether" - requiring adjacency rejected it. Since
+    is_test_field already guarantees the field's whole role is describing a proposed,
+    not-yet-run test, a bare "whether" anywhere in the sentence is still overwhelmingly
+    a hypothesis marker there, not a laundering device. Strict (non-test) fields keep
+    the stricter adjacent-verb requirement - this bare-whether allowance never applies
+    to rationale/evidence/theme/evidence_basis, so observational-field protection is
+    unchanged."""
+    if _WHETHER_HEDGE_RE.search(sentence):
+        return True
+    if is_test_field and _BARE_WHETHER_RE.search(sentence):
+        return True
+    return False
+
+
+def _trend_hedged(sentence: str, is_test_field: bool) -> bool:
+    """Hedge check for TREND_PRESENT words (increase/drive/generate/...) - the same
+    'whether' rule as _whether_hedged, plus, in test-design fields only, the wider
+    comparative/target framing in _TEST_FRAMING_HEDGE_RE (a success_metric describing a
+    target threshold, e.g. "15% increase compared to baseline", is not phrased with
+    "whether" at all)."""
+    if _whether_hedged(sentence, is_test_field):
+        return True
+    if is_test_field and _TEST_FRAMING_HEDGE_RE.search(sentence):
+        return True
+    return False
+
+
 def _causal_language_match(text: str, is_test_field: bool = False):
     """Return (matched_phrase, sentence) for the first unsupported causal-language use
     in text, or None if there isn't one. See the tier comment above _TREND_PRESENT_RE."""
@@ -697,16 +778,12 @@ def _causal_language_match(text: str, is_test_field: bool = False):
         if m:
             return m.group(0), sentence
 
-        hedged = bool(_WHETHER_HEDGE_RE.search(sentence)) or (
-            is_test_field and bool(_TEST_FRAMING_HEDGE_RE.search(sentence))
-        )
-
         m = _first_real_match(_TREND_PRESENT_RE, sentence)
-        if m and not hedged:
+        if m and not _trend_hedged(sentence, is_test_field):
             return m.group(0), sentence
 
         m = _STRONG_CLAIM_RE.search(sentence)
-        if m and not _WHETHER_HEDGE_RE.search(sentence):
+        if m and not _whether_hedged(sentence, is_test_field):
             return m.group(0), sentence
     return None
 

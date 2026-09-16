@@ -799,6 +799,152 @@ class TestFalsePositiveReduction(unittest.TestCase):
         self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation(text)))
 
 
+# --- Stage 6.4: compound-sentence "whether" hedging + full regression matrix. The
+# real run's variable_to_test fields used natural compound phrasing like "Compare A
+# (generic testimonials) and whether B generates C" - the hedge verb ("compare") isn't
+# immediately adjacent to "whether", so the old _WHETHER_HEDGE_RE (which required that
+# adjacency) rejected legitimate test framing. Fixed by _whether_hedged()/
+# _trend_hedged(): in test-design fields specifically, a bare "whether" anywhere in the
+# sentence is enough (these fields are inherently prospective by role), while
+# observational fields keep the stricter adjacent-verb requirement unchanged. This
+# class also re-covers the full 20-item matrix from this request end to end.
+class TestCompoundSentenceHedging(unittest.TestCase):
+    def _opportunity_violation(self, field, text):
+        resp = make_strategy_response(opportunity_overrides={field: text})
+        return strat.find_evidence_violations(resp, VALID_POST_IDS)["hard"]
+
+    def _test_field_violation(self, field, text):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0][field] = text
+        return strat.find_evidence_violations(resp, VALID_POST_IDS)["hard"]
+
+    def test_real_failure_variable_to_test_generates_with_non_adjacent_whether_allowed(self):
+        text = (
+            "generic testimonials without instructor identity) and whether named "
+            "instructor content generates request-for-specific-instructor inquiries"
+        )
+        self.assertEqual(self._test_field_violation("variable_to_test", text), [])
+
+    def test_real_failure_variable_to_test_increases_with_non_adjacent_whether_allowed(self):
+        text = (
+            "baseline general content) and whether trust-focused messaging increases "
+            "DM inquiries about certifications, safety, and operator validation"
+        )
+        self.assertEqual(self._test_field_violation("variable_to_test", text), [])
+
+    def test_bare_whether_does_not_hedge_strict_observational_fields(self):
+        # The compound-sentence exemption is scoped to is_test_field=True only -
+        # rationale/evidence must still require an adjacent hedge verb, not just the
+        # bare word "whether" appearing anywhere.
+        text = "The report notes whether this format drives higher engagement."
+        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("evidence", text)))
+
+    def test_proven_to_is_still_a_strong_claim_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["evidence_basis"] = "This is proven to work in every case."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    # --- 1-8: observational-field and competitor violations ---
+    def test_1_primary_engagement_driver_violation_in_rationale(self):
+        v = self._opportunity_violation("rationale", "Instructor quality is the primary engagement driver.")
+        self.assertTrue(any("causal" in x.lower() for x in v))
+
+    def test_2_engagement_driver_violation_in_evidence(self):
+        v = self._opportunity_violation("evidence", "Stage 4.1 identifies this as a documented engagement driver.")
+        self.assertTrue(any("causal" in x.lower() for x in v))
+
+    def test_3_driven_violation_in_observational_field(self):
+        v = self._opportunity_violation("rationale", "This format has driven stronger saves.")
+        self.assertTrue(any("causal" in x.lower() for x in v))
+
+    def test_4_drive_violation_in_observational_field(self):
+        v = self._opportunity_violation("rationale", "This format will drive stronger saves.")
+        self.assertTrue(any("causal" in x.lower() for x in v))
+
+    def test_5_generates_violation_in_observational_field(self):
+        v = self._opportunity_violation("evidence", "This messaging generates high comment engagement.")
+        self.assertTrue(any("causal" in x.lower() for x in v))
+
+    def test_6_increases_violation_in_observational_field(self):
+        v = self._opportunity_violation("rationale", "Site-specific content increases SEO value.")
+        self.assertTrue(any("causal" in x.lower() for x in v))
+
+    def test_7_competitor_differentiation_violation_unless_verified(self):
+        v = self._opportunity_violation("rationale", "This may differentiate FlyingFish from competitors.")
+        self.assertTrue(any("competitor" in x.lower() for x in v))
+
+    def test_8_competitor_comparison_in_target_audience_violation(self):
+        v = self._opportunity_violation("target_audience", "Potential bookers evaluating FlyingFish against competitors.")
+        self.assertTrue(any("competitor" in x.lower() for x in v))
+
+    # --- 9-12: test-design framing ---
+    def test_9_increases_compared_with_baseline_allowed_in_success_metric(self):
+        self.assertEqual(
+            self._test_field_violation("success_metric", "Inquiries increase compared with baseline."), []
+        )
+
+    def test_10_measure_whether_inquiries_increase_allowed_in_variable_to_test(self):
+        self.assertEqual(
+            self._test_field_violation("variable_to_test", "Measure whether inquiries increase during the test."), []
+        )
+
+    def test_11_test_whether_x_drives_y_allowed_in_hypothesis(self):
+        self.assertEqual(
+            self._test_field_violation("hypothesis", "Test whether named-instructor content drives higher engagement than generic testimonials."),
+            [],
+        )
+
+    def test_12_past_tense_drove_is_violation_even_in_test_field(self):
+        v = self._test_field_violation("hypothesis", "Named-instructor content drove higher engagement than generic testimonials.")
+        self.assertTrue(any("causal" in x.lower() for x in v))
+
+    # --- 13-16: compound adjectives and observed-metric exemptions ---
+    def test_13_scarcity_driven_allowed(self):
+        self.assertEqual(self._opportunity_violation("evidence", "Scarcity-driven booking windows appear in the caption."), [])
+
+    def test_14_narrative_driven_allowed(self):
+        self.assertEqual(self._opportunity_violation("rationale", "Narrative-driven reels feature career transformation."), [])
+
+    def test_15_generating_likes_allowed(self):
+        self.assertEqual(
+            self._opportunity_violation("evidence", "DWyk4T6E5OF, generating 3,266 likes and 49 comments, shows strong engagement."), []
+        )
+
+    def test_16_generating_bookings_not_automatically_allowed(self):
+        v = self._opportunity_violation("evidence", "This format is generating 40 bookings this month.")
+        self.assertTrue(any("causal" in x.lower() for x in v))
+
+    # --- 17-20: competitor verification paths ---
+    def test_17_verified_competitor_claim_with_requires_verification_allowed(self):
+        resp = make_strategy_response(
+            opportunity_overrides={
+                "rationale": "This may differentiate FlyingFish from competitors.",
+                "requires_verification": True,
+                "verification_reason": "No competitor dataset was supplied; needs manual research.",
+            }
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_18_hedged_competitor_statement_allowed(self):
+        v = self._opportunity_violation(
+            "rationale", "Whether this differentiates FlyingFish from competitors requires competitor research."
+        )
+        self.assertEqual(v, [])
+
+    def test_19_driving_advance_bookings_violation(self):
+        v = self._opportunity_violation(
+            "rationale",
+            "Seasonal countdown messaging is associated with notably high comment engagement, driving advance bookings.",
+        )
+        self.assertTrue(any("causal" in x.lower() for x in v))
+
+    def test_20_differentiates_from_competitors_violation_without_verification(self):
+        v = self._opportunity_violation("rationale", "Clear course explanations differentiate from unstructured competitors.")
+        self.assertTrue(any("competitor" in x.lower() for x in v))
+
+
 # --- error message extraction (Step 2 fix: real Anthropic error, never a bare status) ---
 class TestApiErrorMessageExtraction(unittest.TestCase):
     def test_extracts_message_from_body_error_dict(self):
