@@ -440,6 +440,108 @@ class TestBusinessFactClaims(unittest.TestCase):
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
 
+    def test_hedged_competitor_mention_without_flag_is_auto_corrected(self):
+        resp = make_strategy_response(
+            opportunity_overrides={
+                "evidence": "A potential differentiation angle; competitor validation required.",
+                "requires_verification": False,
+            }
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        applied = strat.apply_auto_corrections(resp, violations)
+        self.assertGreater(applied, 0)
+        self.assertTrue(resp["content_opportunities"][0]["requires_verification"])
+
+
+# --- Stage 6.1: real-run hardening - causal-language/competitor/business-outcome
+# language must be caught (or allowed) regardless of which field it appears in, not
+# just a fixed list of array indexes. Covers the actual phrases from the real
+# production failure ("primary engagement driver", "drives", "proves") plus the
+# explicit allow/deny matrix requested for this hardening pass.
+class TestCausalAndCompetitorLanguageHardening(unittest.TestCase):
+    def test_drives_bookings_is_hard_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "This will drive measurable booking conversions."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_increases_bookings_as_factual_claim_is_hard_violation(self):
+        resp = make_strategy_response(opportunity_overrides={"rationale": "This format increases bookings."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_test_whether_bookings_increase_is_allowed(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "Test whether bookings increase after this change."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_measure_whether_engagement_increases_is_allowed(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["success_metric"] = "Measure whether engagement increases week over week."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_proves_more_resonant_is_hard_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "This proves more resonant with the audience."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_primary_engagement_driver_is_hard_violation(self):
+        resp = make_strategy_response(opportunity_overrides={"rationale": "Instructor quality is the primary engagement driver."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_differentiating_from_competitors_without_data_is_hard_violation(self):
+        resp = make_strategy_response(opportunity_overrides={"evidence": "Differentiating from unstructured competitors."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
+
+    def test_competitor_validation_required_is_allowed(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"evidence": "A potential differentiation angle; competitor validation required."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_may_be_associated_with_bookings_is_allowed(self):
+        resp = make_strategy_response(opportunity_overrides={"evidence": "This may be associated with bookings."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_action_plan_causal_language_is_hard_violation(self):
+        resp = make_strategy_response()
+        resp["action_plan"] = ["[NEXT] These formats drive highest-intent inquiries."]
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_action_plan_measurement_language_is_allowed(self):
+        resp = make_strategy_response()
+        resp["action_plan"] = [
+            "[NEXT] Track inquiry source and content theme to measure which formats "
+            "are associated with higher-intent inquiries."
+        ]
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_recommended_test_framed_as_hypothesis_is_allowed(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = (
+            "Test whether named instructor spotlights receive different engagement "
+            "than comparable testimonials without an instructor focus."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_unsupported_business_outcome_claim_flagged(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"evidence": "This is associated with higher booking conversions."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+        self.assertTrue(any(v["type"] == "flag_verification" for v in violations["soft"]))
+
 
 # --- error message extraction (Step 2 fix: real Anthropic error, never a bare status) ---
 class TestApiErrorMessageExtraction(unittest.TestCase):

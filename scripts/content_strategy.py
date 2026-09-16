@@ -116,23 +116,82 @@ audience data, or business claims that were not in the report you were given.
 You must NEVER cite, in any evidence_post_ids field, a post_id that is not in that list.
 
 EVIDENCE HIERARCHY - every claim must be classified as exactly one of:
-- "observed": a fact directly readable from the supplied Stage 4.1 report.
-- "interpretation": a reasonable reading of observed data, not a proven causal link.
-- "hypothesis": a proposed idea that is NOT proven by the dataset and needs testing.
-- "recommendation": a proposed action based on the evidence and/or hypothesis.
+- OBSERVED: directly supported by Stage 4.1 evidence.
+- INTERPRETATION: a reasonable interpretation of observed data, clearly phrased as
+  interpretation, not as fact.
+- HYPOTHESIS: a proposed explanation or testable idea. Never present it as established
+  fact.
+- RECOMMENDATION: a proposed action based on the evidence. It is NOT proof that the
+  action will produce a particular business outcome.
 Never upgrade a hypothesis into a stated fact. Never say "people love this" or "this
 content causes higher engagement" - say "this format was associated with stronger
 engagement in the analyzed sample" or "this is a hypothesis worth testing".
+
+LANGUAGE RULES - the Instagram engagement dataset shows association, not causation.
+NEVER claim that engagement data proves causation.
+
+Avoid these words/phrases as factual claims:
+drives, causes, proves, guarantees, results in, leads to, increases, decreases,
+converts, generates bookings, drives bookings, drives conversions, primary driver,
+engagement driver.
+
+When the data only shows association, prefer phrasing such as:
+"is associated with", "appears alongside", "was observed in", "performed strongly in
+this sample", "may be worth testing", "suggests a possible relationship", "could
+indicate", "test whether", "measure whether", "compare whether".
+
+"increases"/"decreases"/"converts"/"generates"/"results in"/"leads to" are acceptable
+ONLY inside a testable framing such as "test whether bookings increase" or "measure
+whether engagement increases" - never as a bare factual claim such as "this format
+increases bookings". Do not mechanically swap one phrase for another word-by-word if
+the sentence becomes grammatically wrong - generate the correct hedged phrasing from
+the start.
+
+COMPETITOR CLAIMS - the Stage 4.1 report contains FlyingFish data only, never actual
+competitor data. Do NOT claim things like "FlyingFish differentiates from
+competitors", "competitors don't do this", "generic competitors", "unstructured
+competitors", "better than competitors", or "competitive advantage over competitors".
+If an idea genuinely involves differentiation, phrase it as "a potential
+differentiation angle; competitor validation required" or "could be tested as a
+differentiation angle, but competitor data is required before making comparative
+claims" - and set requires_verification=true with a verification_reason explaining
+that competitor data is needed.
+
+BUSINESS OUTCOME CLAIMS - the supplied dataset contains Instagram engagement
+observations only. It does NOT establish bookings, booking conversions, revenue,
+leads, customer acquisition, enrollment, inquiry quality, conversion rate, or ROI.
+Never present those as established outcomes.
+  Bad: "Educational content drives bookings."
+  Good: "Educational content showed strong engagement in this sample; test whether
+  similar content is associated with higher-intent inquiries."
+  Bad: "This format increases bookings."
+  Good: "Test whether this format is associated with changes in booking inquiries."
+  Bad: "Non-swimmer content drives conversions."
+  Good: "Test whether non-swimmer-focused content is associated with higher inquiry
+  volume from that audience."
+
+RECOMMENDED TESTS - each test must stay genuinely useful: state what to change, what
+comparison to make, what metric to measure, and what observation would support/reject
+the hypothesis. Use language such as "Test whether...", "Compare...", "Measure...",
+"Evaluate whether...", "Track...". If a test mentions bookings or conversions, make
+explicit that these are FUTURE MEASUREMENT TARGETS the Instagram dataset does not
+itself establish - never a promised result.
+  Bad: "Named instructor spotlights will increase engagement and drive bookings."
+  Better: "Test whether named instructor spotlights receive different engagement than
+  comparable testimonials without an instructor focus."
+
+ACTION PLAN - action items describe an action and how to measure it, never a claimed
+causal effect.
+  Bad: "Identify which formats drive highest-intent inquiries."
+  Better: "Track inquiry source and content theme to measure which formats are
+  associated with higher-intent inquiries."
 
 HARD RULES:
 1. Never fabricate Instagram numbers, post IDs, captions, audience demographics,
    business facts, competitor behavior, market/tourism statistics, customer
    motivations, or seasonal performance claims - use only what Stage 4.1 gave you.
-2. Never claim causation ("drives", "causes", "proves", "guarantees") - use hedged
-   language: "appears associated with", "observed in", "may be worth testing".
-3. Never make competitor claims - no competitor data was supplied. If relevant, phrase
-   as "this may represent a potential differentiation opportunity; competitor
-   validation is required" and set requires_verification=true.
+2. Never claim causation - see LANGUAGE RULES above.
+3. Never make unhedged competitor claims - see COMPETITOR CLAIMS above.
 4. Never state a business fact (certifications, partnerships, pricing, guarantees,
    safety/market claims) as verified unless it was explicitly supplied as verified
    context - it was not in this run. If referenced, set requires_verification=true
@@ -455,20 +514,70 @@ def parse_action_plan(items: list) -> dict:
 # structural safeguards, mirroring Stage 4.1's hardening. "Hard" violations mean the
 # claim itself is unsafe as worded; "soft" violations are missing metadata that can be
 # safely auto-corrected without discarding the claim.
-_CAUSAL_VERBS_RE = re.compile(r"\b(drives?|causes?|proves?|guarantees?)\b", re.IGNORECASE)
+#
+# Causal-language detection is split into two tiers:
+# - "unconditional": words/phrases that assert causation outright (drives, causes,
+#   proves, guarantees, "(primary/engagement) driver") - never acceptable, hedged or not.
+# - "conditional": words (increases, decreases, converts, generates, results in, leads
+#   to) that are fine inside a testable framing ("test whether bookings increase") but
+#   a hard violation when stated as a bare factual claim ("this increases bookings").
+# Checked per-sentence so "Test whether X increases" isn't penalized for a causal word
+# appearing elsewhere in a different, genuinely causal sentence in the same field.
+_UNCONDITIONAL_CAUSAL_RE = re.compile(
+    r"\b(drives?|driving|drove|driven|causes?|caused|proves?|proved|guarantees?|guaranteed)\b"
+    r"|\bprimary\s+(?:engagement\s+)?drivers?\b"
+    r"|\bengagement\s+drivers?\b",
+    re.IGNORECASE,
+)
+_CONDITIONAL_CAUSAL_RE = re.compile(
+    r"\b(increases?|decreases?|converts?|generates?)\b|\bresults?\s+in\b|\bleads?\s+to\b",
+    re.IGNORECASE,
+)
+_HEDGE_TRIGGER_RE = re.compile(
+    r"\b(test|measure|compare|evaluate|track|assess|determine)\s+whether\b", re.IGNORECASE
+)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
 _COMPETITOR_RE = re.compile(r"\bcompetitors?\b", re.IGNORECASE)
 _COMPETITOR_HEDGE_RE = re.compile(
-    r"\b(requires?\s+verification|validation\s+is\s+required|competitor\s+validation)\b", re.IGNORECASE
+    r"\b(competitor\s+validation(?:\s+is)?\s+required|requires?\s+competitor\s+(?:validation|research)|"
+    r"validation\s+is\s+required|potential\s+differentiation|"
+    r"cannot\s+be\s+concluded\s+from\s+(?:the\s+)?current\s+data)\b",
+    re.IGNORECASE,
 )
 _CALENDAR_PERIOD_RE = re.compile(r"\bQ[1-4]\s*20\d{2}\b|\b20\d{2}\s*Q[1-4]\b", re.IGNORECASE)
 _BUSINESS_FACT_RE = re.compile(
     r"\b(PADI|SSI|certifi\w*|award\w*|partnership\w*|licens\w*|guarantee\w*|scam\w*|"
-    r"safety\s+concern\w*|tourist\s+market\w*)\b",
+    r"safety\s+concern\w*|tourist\s+market\w*|"
+    r"bookings?|booking\s+conversions?|revenue|leads?(?!\s+to\b)|customer\s+acquisition|"
+    r"enrollment\w*|inquiry\s+quality|conversion\s+rates?|ROI)\b",
     re.IGNORECASE,
 )
 _UNIVERSAL_LANGUAGE_RE = re.compile(
     r"\b(always|every\s+post|all\s+posts|consistently\s+performs?|guaranteed|people\s+love)\b", re.IGNORECASE
 )
+
+
+def _sentences(text: str) -> list:
+    text = (text or "").strip()
+    if not text:
+        return []
+    parts = [p.strip() for p in _SENTENCE_SPLIT_RE.split(text) if p.strip()]
+    return parts or [text]
+
+
+def _causal_language_match(text: str):
+    """Return (matched_phrase, sentence) for the first unsupported causal-language use
+    in text, or None if there isn't one. See the tier comment above _UNCONDITIONAL_CAUSAL_RE."""
+    for sentence in _sentences(text):
+        m = _UNCONDITIONAL_CAUSAL_RE.search(sentence)
+        if m:
+            return m.group(0), sentence
+        m = _CONDITIONAL_CAUSAL_RE.search(sentence)
+        if m and not _HEDGE_TRIGGER_RE.search(sentence):
+            return m.group(0), sentence
+    return None
+
 
 _EVIDENCE_GROUPS = [
     ("content_opportunities", "opportunity"),
@@ -476,20 +585,42 @@ _EVIDENCE_GROUPS = [
     ("recommended_formats", "format"),
 ]
 
+# Every free-text field per group, used both to scan for unsafe language (field-aware,
+# not a hardcoded list of array indexes) and to build combined_text for the soft
+# business-fact/competitor-mention checks below.
+_CONTENT_OPPORTUNITIES_TEXT_FIELDS = (
+    "opportunity", "rationale", "evidence", "recommended_format",
+    "target_audience", "content_angle", "suggested_hook", "core_message", "suggested_cta",
+)
+_STRATEGY_THEMES_TEXT_FIELDS = ("theme", "evidence")
+_RECOMMENDED_FORMATS_TEXT_FIELDS = ("format", "rationale")
+_RECOMMENDED_TESTS_TEXT_FIELDS = (
+    "test_name", "hypothesis", "variable_to_test", "format",
+    "audience", "success_metric", "suggested_duration", "evidence_basis",
+)
+_GROUP_TEXT_FIELDS = {
+    "content_opportunities": _CONTENT_OPPORTUNITIES_TEXT_FIELDS,
+    "strategy_themes": _STRATEGY_THEMES_TEXT_FIELDS,
+    "recommended_formats": _RECOMMENDED_FORMATS_TEXT_FIELDS,
+}
+
 
 def _iter_text_fields(data: dict):
-    """Yield (location, text) for every free-text string field in a response."""
+    """Yield (location, text) for every free-text string field in a response - every
+    claim-bearing field across every item, not a hardcoded list of specific indexes."""
     yield "executive_summary", data.get("executive_summary", "")
 
     for i, item in enumerate(data.get("content_opportunities", [])):
-        for field in ("opportunity", "rationale", "evidence", "suggested_hook", "core_message", "suggested_cta"):
+        for field in _CONTENT_OPPORTUNITIES_TEXT_FIELDS:
             yield f"content_opportunities[{i}].{field}", item.get(field, "")
     for i, item in enumerate(data.get("strategy_themes", [])):
-        yield f"strategy_themes[{i}].evidence", item.get("evidence", "")
+        for field in _STRATEGY_THEMES_TEXT_FIELDS:
+            yield f"strategy_themes[{i}].{field}", item.get(field, "")
     for i, item in enumerate(data.get("recommended_formats", [])):
-        yield f"recommended_formats[{i}].rationale", item.get("rationale", "")
+        for field in _RECOMMENDED_FORMATS_TEXT_FIELDS:
+            yield f"recommended_formats[{i}].{field}", item.get(field, "")
     for i, item in enumerate(data.get("recommended_tests", [])):
-        for field in ("hypothesis", "success_metric", "evidence_basis"):
+        for field in _RECOMMENDED_TESTS_TEXT_FIELDS:
             yield f"recommended_tests[{i}].{field}", item.get(field, "")
     for i, text in enumerate(data.get("action_plan", [])):
         yield f"action_plan[{i}]", text
@@ -504,10 +635,12 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
     for location, text in _iter_text_fields(data):
         if not isinstance(text, str):
             continue
-        if _CAUSAL_VERBS_RE.search(text):
+        causal = _causal_language_match(text)
+        if causal:
+            phrase, sentence = causal
             hard.append(
-                f"{location}: uses causal language ('drives'/'causes'/'proves'/'guarantees') "
-                f"not supported by observational data: {text!r}"
+                f"{location}: uses unsupported causal language ({phrase!r}) - state "
+                f"association or a testable hypothesis instead of causation: {sentence!r}"
             )
         if _COMPETITOR_RE.search(text) and not _COMPETITOR_HEDGE_RE.search(text):
             hard.append(
@@ -543,7 +676,10 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
             # integer, not a nullable one - see _EVIDENCE_FIELDS comment).
             sample_size = item.get("sample_size")
             requires_verification = bool(item.get("requires_verification", False))
-            combined_text = " ".join(str(item.get(f, "")) for f in (label_field, "evidence", "rationale") if f in item)
+            combined_text = " ".join(
+                str(item.get(f, "")) for f in _GROUP_TEXT_FIELDS.get(group_name, (label_field, "evidence", "rationale"))
+                if item.get(f)
+            )
 
             if sample_size and sample_size <= 2 and confidence == "high":
                 soft.append(
@@ -568,7 +704,21 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
                     {
                         "loc": loc,
                         "type": "flag_verification",
-                        "detail": "references a business/external fact (certification, award, safety/market claim, etc.) not supplied as verified context",
+                        "detail": "references a business/external fact or unestablished business outcome "
+                        "(certification, award, safety/market claim, bookings, revenue, leads, etc.) "
+                        "not supplied as verified context",
+                    }
+                )
+
+            # An unhedged competitor mention is already a hard violation (caught above via
+            # _iter_text_fields); a properly hedged one ("competitor validation required")
+            # still needs requires_verification=true rather than silently passing through.
+            if not requires_verification and _COMPETITOR_RE.search(combined_text):
+                soft.append(
+                    {
+                        "loc": loc,
+                        "type": "flag_verification",
+                        "detail": "mentions competitors - requires_verification should be set since no competitor data was supplied",
                     }
                 )
 
@@ -587,6 +737,27 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
         test_confidence = item.get("confidence")
         if test_confidence not in ALLOWED_CONFIDENCE_LEVELS:
             hard.append(f"{loc}: confidence must be one of {sorted(ALLOWED_CONFIDENCE_LEVELS)}, got {test_confidence!r}")
+
+        requires_verification = bool(item.get("requires_verification", False))
+        combined_text = " ".join(str(item.get(f, "")) for f in _RECOMMENDED_TESTS_TEXT_FIELDS if item.get(f))
+        if not requires_verification and _BUSINESS_FACT_RE.search(combined_text):
+            soft.append(
+                {
+                    "loc": loc,
+                    "type": "flag_verification",
+                    "detail": "references a business/external fact or unestablished business outcome "
+                    "(certification, award, safety/market claim, bookings, revenue, leads, etc.) "
+                    "not supplied as verified context",
+                }
+            )
+        if not requires_verification and _COMPETITOR_RE.search(combined_text):
+            soft.append(
+                {
+                    "loc": loc,
+                    "type": "flag_verification",
+                    "detail": "mentions competitors - requires_verification should be set since no competitor data was supplied",
+                }
+            )
 
     return {"hard": hard, "soft": soft}
 
@@ -611,6 +782,16 @@ def apply_auto_corrections(data: dict, violations: dict) -> int:
                     note = f"auto-flagged: {v['detail']}"
                     item["verification_reason"] = f"{existing}; {note}" if existing else note
                     count += 1
+
+    for i, item in enumerate(data.get("recommended_tests", [])):
+        loc = f"recommended_tests[{i}]"
+        for v in soft_by_loc.get(loc, []):
+            if v["type"] == "flag_verification" and not item.get("requires_verification"):
+                item["requires_verification"] = True
+                existing = item.get("verification_reason")
+                note = f"auto-flagged: {v['detail']}"
+                item["verification_reason"] = f"{existing}; {note}" if existing else note
+                count += 1
     return count
 
 
