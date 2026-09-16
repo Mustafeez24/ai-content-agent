@@ -53,15 +53,46 @@ STAGE41_FIXTURE = {
 def make_opportunity(**overrides):
     base = {
         "opportunity": "More testimonial-style reels",
-        "rationale": "Top post used testimonial framing",
-        "evidence": "Observed in POST_TOP1",
+        "observation": "POST_TOP1 had 3,200 likes and 115 comments.",
+        "pattern": "testimonial framing",
+        "interpretation": "This format is associated with stronger engagement in the observed sample.",
+        "hypothesis": "Test whether dedicated testimonial reels receive higher engagement than generic posts.",
         "recommended_format": "reel",
         "target_audience": "prospective divers",
-        "content_angle": "instructor trust",
-        "suggested_hook": "Meet the instructor who got me certified",
-        "core_message": "Structured, supportive learning",
         "suggested_cta": "DM us to book a trial dive",
         "evidence_type": "hypothesis",
+        "evidence_post_ids": ["POST_TOP1"],
+        "sample_size": 1,
+        "confidence": "low",
+        "requires_verification": False,
+        "verification_reason": "",
+    }
+    base.update(overrides)
+    return base
+
+
+def make_theme(**overrides):
+    base = {
+        "theme": "Instructor trust",
+        "observation": "POST_TOP1 had 3,200 likes.",
+        "interpretation": "Instructor praise is associated with strong engagement in the observed sample.",
+        "evidence_type": "interpretation",
+        "evidence_post_ids": ["POST_TOP1"],
+        "sample_size": 1,
+        "confidence": "low",
+        "requires_verification": False,
+        "verification_reason": "",
+    }
+    base.update(overrides)
+    return base
+
+
+def make_format(**overrides):
+    base = {
+        "format": "reel",
+        "observation": "POST_TOP1 had 3,200 likes.",
+        "interpretation": "This format is associated with the strongest observed performer.",
+        "evidence_type": "interpretation",
         "evidence_post_ids": ["POST_TOP1"],
         "sample_size": 1,
         "confidence": "low",
@@ -75,14 +106,16 @@ def make_opportunity(**overrides):
 def make_test_item(**overrides):
     base = {
         "test_name": "Testimonial reel test",
-        "hypothesis": "May be associated with higher engagement",
+        "hypothesis": "Test whether testimonial framing is associated with higher engagement than baseline.",
         "target_type": "proposed_test_target",
         "variable_to_test": "testimonial framing",
         "format": "reel",
         "audience": "prospective divers",
-        "success_metric": "likes above dataset average",
+        "metric": "likes",
+        "target": "15% above dataset average",
+        "comparison": "dataset average",
         "suggested_duration": "next 4 weeks",
-        "evidence_basis": "POST_TOP1 performance",
+        "evidence_basis": "POST_TOP1 had 3,200 likes.",
         "evidence_post_ids": ["POST_TOP1"],
         "confidence": "low",
         "requires_verification": False,
@@ -96,30 +129,8 @@ def make_strategy_response(opportunity_overrides=None, **top_overrides):
     resp = {
         "executive_summary": "A small set of evidence items suggest testimonial framing is worth testing further.",
         "content_opportunities": [make_opportunity(**(opportunity_overrides or {}))],
-        "strategy_themes": [
-            {
-                "theme": "Instructor trust",
-                "evidence": "Present in the top-performing post",
-                "evidence_type": "interpretation",
-                "evidence_post_ids": ["POST_TOP1"],
-                "sample_size": 1,
-                "confidence": "low",
-                "requires_verification": False,
-                "verification_reason": "",
-            }
-        ],
-        "recommended_formats": [
-            {
-                "format": "reel",
-                "rationale": "Associated with the strongest observed performer",
-                "evidence_type": "interpretation",
-                "evidence_post_ids": ["POST_TOP1"],
-                "sample_size": 1,
-                "confidence": "low",
-                "requires_verification": False,
-                "verification_reason": "",
-            }
-        ],
+        "strategy_themes": [make_theme()],
+        "recommended_formats": [make_format()],
         "recommended_tests": [make_test_item()],
         "action_plan": [
             "[IMMEDIATE] Draft one testimonial-style reel in the next 1-2 weeks",
@@ -174,9 +185,8 @@ class TestKnownPostIds(unittest.TestCase):
         self.assertEqual(ids, {"POST_TOP1", "POST_TOP2"})
 
 
-# --- Regression: the simplified schema must stay meaningfully below the complexity
-# that produced the real "compiled grammar is too large" 400 error, and must not have
-# silently dropped any required output section in the process of simplifying it. ---
+# --- Regression: schema complexity must stay meaningfully below the level that
+# produced the real "compiled grammar is too large" 400 error. ---
 class TestSchemaComplexityRegression(unittest.TestCase):
     def _count_enums_and_unions(self, schema):
         enums = 0
@@ -197,15 +207,12 @@ class TestSchemaComplexityRegression(unittest.TestCase):
         return enums, unions
 
     def test_schema_has_no_enum_fields(self):
-        # The real 400 was "compiled grammar too large" from Anthropic's structured-
-        # output compiler; enum/union branching are the most plausible contributors.
-        # The fix removes all enums entirely - allowed values are enforced in Python.
         enums, _ = self._count_enums_and_unions(strat.CONTENT_STRATEGY_RESPONSE_SCHEMA)
-        self.assertEqual(enums, 0, "schema should contain zero JSON-schema enums after simplification")
+        self.assertEqual(enums, 0, "schema should contain zero JSON-schema enums")
 
     def test_schema_has_no_nullable_type_unions(self):
         _, unions = self._count_enums_and_unions(strat.CONTENT_STRATEGY_RESPONSE_SCHEMA)
-        self.assertEqual(unions, 0, "schema should contain zero [type, null] unions after simplification")
+        self.assertEqual(unions, 0, "schema should contain zero [type, null] unions")
 
     def test_schema_size_below_reasonable_threshold(self):
         size = len(json.dumps(strat.CONTENT_STRATEGY_RESPONSE_SCHEMA))
@@ -214,19 +221,20 @@ class TestSchemaComplexityRegression(unittest.TestCase):
         self.assertLess(size, 6000, f"schema grew to {size} chars - re-check grammar complexity")
 
     def test_action_plan_is_flat_not_nested_object(self):
-        # One fewer distinct object shape for the grammar compiler than the original
-        # {immediate, next, later} nested object.
         schema = strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["properties"]["action_plan"]
         self.assertEqual(schema, {"type": "array", "items": {"type": "string"}})
+
+    def test_additional_properties_false_everywhere(self):
+        top = strat.CONTENT_STRATEGY_RESPONSE_SCHEMA
+        self.assertFalse(top.get("additionalProperties", True))
+        for key in ("content_opportunities", "strategy_themes", "recommended_formats", "recommended_tests"):
+            item_schema = top["properties"][key]["items"]
+            self.assertFalse(item_schema.get("additionalProperties", True), f"{key} should not allow additionalProperties")
 
 
 class TestSchemaContainsRequiredSections(unittest.TestCase):
     def test_all_critical_output_sections_present(self):
         top_level_props = set(strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["properties"].keys())
-        # top_performing_content and metadata are assembled in Python from Stage 4.1's
-        # deterministic data (see main()), not requested from Claude - they are not part
-        # of the API-facing schema by design (Claude never touches those numbers), but
-        # must appear in the final written output. Check both surfaces.
         api_schema_sections = {
             "executive_summary", "content_opportunities", "strategy_themes",
             "recommended_formats", "recommended_tests", "action_plan",
@@ -241,13 +249,11 @@ class TestSchemaContainsRequiredSections(unittest.TestCase):
         }
         # These are Stage 4.1's own section names (its INPUT contract, re-verified here
         # against REQUIRED_SECTIONS) - Stage 6's own OUTPUT uses different, purpose-built
-        # names (content_opportunities/strategy_themes/recommended_formats) since it is a
-        # new artifact, not a copy of Stage 4.1's report. Confirm Stage 6 still reads
-        # every one of these from its input.
+        # names, since it is a new artifact, not a copy of Stage 4.1's report.
         self.assertEqual(set(strat.REQUIRED_SECTIONS), expected)
 
 
-# --- 6/7: malformed / truncated response handling (pure function) ---
+# --- malformed / truncated response handling (pure function) ---
 class TestJsonExtraction(unittest.TestCase):
     def test_valid_json_parses(self):
         resp = make_strategy_response()
@@ -267,7 +273,7 @@ class TestJsonExtraction(unittest.TestCase):
             strat.extract_json_object(truncated)
 
 
-# --- 8: missing required output field ---
+# --- missing required output field ---
 class TestValidation(unittest.TestCase):
     def test_missing_top_level_field_rejected(self):
         resp = make_strategy_response()
@@ -276,7 +282,6 @@ class TestValidation(unittest.TestCase):
             strat.validate_strategy_response(resp)
 
     def test_action_plan_wrong_type_rejected(self):
-        # action_plan is a flat array of strings (schema-simplified) - a dict is wrong.
         resp = make_strategy_response()
         resp["action_plan"] = {"immediate": ["x"], "next": [], "later": []}
         with self.assertRaises(strat.DataError):
@@ -287,7 +292,7 @@ class TestValidation(unittest.TestCase):
         strat.validate_strategy_response(resp)  # should not raise
 
 
-# --- 9: invented post ID ---
+# --- invented post ID ---
 class TestInventedPostIds(unittest.TestCase):
     def test_invented_post_id_is_hard_violation(self):
         resp = make_strategy_response(opportunity_overrides={"evidence_post_ids": ["POST_DOES_NOT_EXIST"]})
@@ -306,7 +311,7 @@ class TestInventedPostIds(unittest.TestCase):
         self.assertTrue(any("FAKE_POST" in v for v in violations["hard"]))
 
 
-# --- 13: Claude cannot change/fabricate evidence numbers (structural) ---
+# --- Claude cannot change/fabricate evidence numbers (structural) ---
 class TestNoNumericFabricationSurface(unittest.TestCase):
     def test_content_opportunities_schema_has_no_engagement_number_fields(self):
         schema = strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["properties"]["content_opportunities"]["items"]
@@ -314,23 +319,20 @@ class TestNoNumericFabricationSurface(unittest.TestCase):
             self.assertNotIn(forbidden, schema["properties"])
         self.assertFalse(schema.get("additionalProperties", True))
 
-    def test_schema_rejects_additional_properties_everywhere(self):
-        for key in ("content_opportunities", "strategy_themes", "recommended_formats", "recommended_tests"):
-            schema = strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["properties"][key]["items"]
-            self.assertFalse(schema.get("additionalProperties", True), f"{key} should not allow additionalProperties")
 
-
-# --- 14/17: unsupported performance claims / experimental targets must be labeled ---
-class TestPerformanceClaimsAndTargets(unittest.TestCase):
-    def test_causal_claim_is_hard_violation(self):
-        resp = make_strategy_response(opportunity_overrides={"evidence": "Testimonial framing drives higher engagement."})
+# --- Missing evidence metadata is invalid ---
+class TestMissingEvidenceMetadata(unittest.TestCase):
+    def test_missing_evidence_type_is_hard_violation(self):
+        resp = make_strategy_response()
+        del resp["content_opportunities"][0]["evidence_type"]
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+        self.assertTrue(any("evidence_type" in v for v in violations["hard"]))
 
-    def test_hedged_claim_is_allowed(self):
-        resp = make_strategy_response(opportunity_overrides={"evidence": "Testimonial framing appears associated with higher engagement."})
+    def test_missing_confidence_is_hard_violation(self):
+        resp = make_strategy_response()
+        del resp["content_opportunities"][0]["confidence"]
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
+        self.assertTrue(any("confidence" in v for v in violations["hard"]))
 
     def test_recommended_test_missing_target_type_is_hard_violation(self):
         resp = make_strategy_response()
@@ -343,10 +345,7 @@ class TestPerformanceClaimsAndTargets(unittest.TestCase):
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertEqual(violations["hard"], [])
 
-    def test_schema_requires_target_type_field(self):
-        # Schema-simplified: target_type is a plain required string (not a JSON-schema
-        # enum, to keep the compiled grammar small) - the literal value is enforced by
-        # find_evidence_violations() instead, tested above.
+    def test_schema_requires_target_type_plain_string_not_enum(self):
         schema = strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["properties"]["recommended_tests"]["items"]
         self.assertIn("target_type", schema["required"])
         self.assertEqual(schema["properties"]["target_type"], {"type": "string"})
@@ -359,11 +358,8 @@ class TestPerformanceClaimsAndTargets(unittest.TestCase):
         self.assertTrue(any("confidence" in v for v in violations["hard"]))
 
 
-# --- 15: hypothesis correctly labeled (structural + pass-through) ---
 class TestEvidenceTypeLabeling(unittest.TestCase):
     def test_evidence_type_is_plain_string_in_schema(self):
-        # Schema-simplified: evidence_type is a plain required string, not a JSON-schema
-        # enum - the allowed-value set is enforced by find_evidence_violations() instead.
         schema = strat.CONTENT_STRATEGY_RESPONSE_SCHEMA["properties"]["content_opportunities"]["items"]
         self.assertEqual(schema["properties"]["evidence_type"], {"type": "string"})
         self.assertEqual(
@@ -375,7 +371,6 @@ class TestEvidenceTypeLabeling(unittest.TestCase):
         resp = make_strategy_response(opportunity_overrides={"evidence_type": "hypothesis"})
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertEqual(violations["hard"], [])
-        self.assertEqual(resp["content_opportunities"][0]["evidence_type"], "hypothesis")
 
     def test_invalid_evidence_type_is_hard_violation(self):
         resp = make_strategy_response(opportunity_overrides={"evidence_type": "definitely-true-fact"})
@@ -383,7 +378,6 @@ class TestEvidenceTypeLabeling(unittest.TestCase):
         self.assertTrue(any("evidence_type" in v for v in violations["hard"]))
 
 
-# --- Calendar period hardening ---
 class TestCalendarPeriods(unittest.TestCase):
     def test_hardcoded_quarter_in_action_plan_is_hard_violation(self):
         resp = make_strategy_response()
@@ -418,16 +412,206 @@ class TestActionPlanParsing(unittest.TestCase):
         self.assertEqual(result["later"], [])
 
 
-# --- 16: external/business claim requires verification ---
+# --- STRICT fields (observation/interpretation/evidence_basis): unconditional causal
+# check, no hedge exemption of any kind - these fields never propose a test.
+class TestStrictFieldCausalLanguage(unittest.TestCase):
+    def test_drives_in_interpretation_is_violation(self):
+        resp = make_strategy_response(opportunity_overrides={"interpretation": "This drives higher engagement."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_primary_driver_in_interpretation_is_violation(self):
+        resp = make_strategy_response(opportunity_overrides={"interpretation": "Instructor quality is the primary driver of engagement."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_generates_in_evidence_basis_is_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["evidence_basis"] = "This messaging generates high comment engagement."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_past_tense_increased_in_observation_is_violation(self):
+        resp = make_strategy_response(opportunity_overrides={"observation": "Engagement increased after this post."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_test_whether_inside_interpretation_does_not_exempt_it(self):
+        # Strict fields have no hedge exemption at all - even a "test whether" phrase
+        # embedded in interpretation does not excuse a causal claim there. The
+        # separate "hypothesis" field exists precisely so this never needs to happen.
+        resp = make_strategy_response(
+            opportunity_overrides={"interpretation": "This drives engagement; test whether it holds up."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_hedged_association_interpretation_is_allowed(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"interpretation": "This format is associated with higher engagement in this sample."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_scarcity_driven_compound_adjective_allowed_in_interpretation(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"interpretation": "Scarcity-driven CTAs are associated with strong engagement in this sample."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_narrative_driven_compound_adjective_allowed(self):
+        resp = make_strategy_response(opportunity_overrides={"observation": "Narrative-driven reels appear among the top posts."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_observed_metric_generating_likes_allowed_in_observation(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"observation": "POST_TOP1, generating 3,266 likes and 49 comments, is the top performer."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_generating_bookings_is_not_automatically_allowed(self):
+        # The observed-metric exemption is scoped to engagement metrics only
+        # (likes/comments/shares/saves/views/followers/reactions) - "bookings" is a
+        # business outcome never established by this dataset, so it is not exempt.
+        resp = make_strategy_response(opportunity_overrides={"observation": "This format is generating 40 bookings this month."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+
+# --- CREATIVE fields: never causal-checked, regardless of content ---
+class TestCreativeFieldsNotCausalChecked(unittest.TestCase):
+    def test_drive_in_pattern_field_not_flagged(self):
+        resp = make_strategy_response(opportunity_overrides={"pattern": "urgency-driven CTAs that drive clicks"})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_guarantee_in_recommended_format_field_not_flagged(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"recommended_format": "Carousel, which guarantees brand-controlled sequencing"}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_action_plan_generate_allowed(self):
+        resp = make_strategy_response()
+        resp["action_plan"] = [
+            "[NEXT] Generate weekly performance report to marketing team comparing actual results to test hypotheses."
+        ]
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_action_plan_drive_treated_as_action_not_evidence(self):
+        resp = make_strategy_response()
+        resp["action_plan"] = ["[NEXT] Drive traffic to the new booking page by pinning the top testimonial reel."]
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_metric_field_not_causal_checked(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["metric"] = "Click-through rate to booking page increases 15%+."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_target_and_comparison_fields_not_causal_checked(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["target"] = "Booking form submissions show increased mentions of safety reassurance."
+        resp["recommended_tests"][0]["comparison"] = "the current baseline, which generates fewer mentions"
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+
+# --- HYPOTHESIS fields: structural validation, not a causal-language scan ---
+class TestHypothesisStructuralValidation(unittest.TestCase):
+    def test_hypothesis_without_test_verb_is_hard_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "Click-through rate to booking page increases 15%+."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("test verb" in v for v in violations["hard"]))
+
+    def test_hypothesis_with_test_whether_is_allowed(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "Test whether click-through rate to booking page increases 15%+."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_hypothesis_starting_with_compare_is_allowed(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = (
+            "Compare generic testimonials against named-instructor content and measure "
+            "whether specific-instructor inquiries differ between the two."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_hypothesis_past_tense_is_violation_even_with_correct_prefix(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "Test whether named-instructor content drove higher engagement."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("past-tense" in v for v in violations["hard"]))
+
+    def test_content_opportunities_hypothesis_also_structurally_checked(self):
+        resp = make_strategy_response(opportunity_overrides={"hypothesis": "Instructor content increases engagement."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("test verb" in v for v in violations["hard"]))
+
+
+# --- competitor claims ---
+class TestCompetitorClaims(unittest.TestCase):
+    def test_unhedged_competitor_claim_in_interpretation_is_hard_violation(self):
+        resp = make_strategy_response(opportunity_overrides={"interpretation": "No competitor addresses this angle."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
+
+    def test_hedged_competitor_claim_allowed(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"interpretation": "A potential differentiation angle; competitor validation required."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_competitor_claim_with_verification_allowed(self):
+        resp = make_strategy_response(
+            opportunity_overrides={
+                "interpretation": "This may differentiate FlyingFish from competitors.",
+                "requires_verification": True,
+                "verification_reason": "No competitor dataset was supplied; needs manual research.",
+            }
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_competitor_claim_in_target_audience_is_hard_violation(self):
+        # target_audience is a CREATIVE field (not causal-checked) but competitor
+        # claims are unsafe in every field, so it's still checked for those.
+        resp = make_strategy_response(
+            opportunity_overrides={"target_audience": "Potential bookers evaluating FlyingFish against competitors."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
+
+    def test_unverified_competitor_claim_in_action_plan_is_hard_violation(self):
+        resp = make_strategy_response()
+        resp["action_plan"] = ["[NEXT] Research how competitors position their certification content."]
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
+
+
 class TestBusinessFactClaims(unittest.TestCase):
     def test_unverified_business_fact_soft_flagged(self):
-        resp = make_strategy_response(opportunity_overrides={"evidence": "The post mentions PADI certification.", "requires_verification": False})
+        resp = make_strategy_response(
+            opportunity_overrides={"observation": "The post mentions PADI certification.", "requires_verification": False}
+        )
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertEqual(violations["hard"], [])
         self.assertTrue(any(v["type"] == "flag_verification" for v in violations["soft"]))
 
     def test_auto_correction_sets_requires_verification(self):
-        resp = make_strategy_response(opportunity_overrides={"evidence": "References a scam concern in the tourist market.", "requires_verification": False})
+        resp = make_strategy_response(
+            opportunity_overrides={"observation": "References a scam concern in the tourist market.", "requires_verification": False}
+        )
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         applied = strat.apply_auto_corrections(resp, violations)
         self.assertGreater(applied, 0)
@@ -435,514 +619,85 @@ class TestBusinessFactClaims(unittest.TestCase):
         self.assertTrue(item["requires_verification"])
         self.assertIsNotNone(item["verification_reason"])
 
-    def test_unhedged_competitor_claim_is_hard_violation(self):
-        resp = make_strategy_response(opportunity_overrides={"rationale": "No competitor addresses this angle."})
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
 
-    def test_hedged_competitor_mention_without_flag_is_auto_corrected(self):
+# --- Regression tests for the exact latest real-run failures from this hardening pass ---
+class TestLatestRealRunFailureRegression(unittest.TestCase):
+    def test_ctas_drive_strong_engagement_is_violation_in_interpretation(self):
+        # content_opportunities[2].evidence (old field name) -> interpretation (new)
         resp = make_strategy_response(
-            opportunity_overrides={
-                "evidence": "A potential differentiation angle; competitor validation required.",
-                "requires_verification": False,
-            }
+            opportunity_overrides={"interpretation": "DH3VdAmCS5g demonstrates that time-limited discount CTAs drive strong engagement."}
         )
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        applied = strat.apply_auto_corrections(resp, violations)
-        self.assertGreater(applied, 0)
-        self.assertTrue(resp["content_opportunities"][0]["requires_verification"])
-
-
-# --- Stage 6.1: real-run hardening - causal-language/competitor/business-outcome
-# language must be caught (or allowed) regardless of which field it appears in, not
-# just a fixed list of array indexes. Covers the actual phrases from the real
-# production failure ("primary engagement driver", "drives", "proves") plus the
-# explicit allow/deny matrix requested for this hardening pass.
-class TestCausalAndCompetitorLanguageHardening(unittest.TestCase):
-    def test_drives_bookings_is_hard_violation(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["hypothesis"] = "This will drive measurable booking conversions."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
 
-    def test_increases_bookings_as_factual_claim_is_hard_violation(self):
-        resp = make_strategy_response(opportunity_overrides={"rationale": "This format increases bookings."})
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    def test_test_whether_bookings_increase_is_allowed(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["hypothesis"] = "Test whether bookings increase after this change."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-
-    def test_measure_whether_engagement_increases_is_allowed(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["success_metric"] = "Measure whether engagement increases week over week."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-
-    def test_proves_more_resonant_is_hard_violation(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["hypothesis"] = "This proves more resonant with the audience."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    def test_primary_engagement_driver_is_hard_violation(self):
-        resp = make_strategy_response(opportunity_overrides={"rationale": "Instructor quality is the primary engagement driver."})
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    def test_differentiating_from_competitors_without_data_is_hard_violation(self):
-        resp = make_strategy_response(opportunity_overrides={"evidence": "Differentiating from unstructured competitors."})
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
-
-    def test_competitor_validation_required_is_allowed(self):
+    def test_proven_educational_format_is_violation_in_interpretation(self):
         resp = make_strategy_response(
-            opportunity_overrides={"evidence": "A potential differentiation angle; competitor validation required."}
+            opportunity_overrides={"interpretation": "A dedicated transparency series would pair well with the proven educational format."}
         )
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-
-    def test_may_be_associated_with_bookings_is_allowed(self):
-        resp = make_strategy_response(opportunity_overrides={"evidence": "This may be associated with bookings."})
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-
-    def test_action_plan_causal_language_is_hard_violation(self):
-        resp = make_strategy_response()
-        resp["action_plan"] = ["[NEXT] These formats drive highest-intent inquiries."]
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
 
-    def test_action_plan_measurement_language_is_allowed(self):
-        resp = make_strategy_response()
-        resp["action_plan"] = [
-            "[NEXT] Track inquiry source and content theme to measure which formats "
-            "are associated with higher-intent inquiries."
-        ]
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-
-    def test_recommended_test_framed_as_hypothesis_is_allowed(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["hypothesis"] = (
-            "Test whether named instructor spotlights receive different engagement "
-            "than comparable testimonials without an instructor focus."
-        )
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-
-    def test_unsupported_business_outcome_claim_flagged(self):
+    def test_proven_to_drive_engagement_is_violation(self):
         resp = make_strategy_response(
-            opportunity_overrides={"evidence": "This is associated with higher booking conversions."}
-        )
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-        self.assertTrue(any(v["type"] == "flag_verification" for v in violations["soft"]))
-
-
-# --- Stage 6.2: real-run failure regression. The real Stage 4.1-driven run rejected a
-# response for causal language in fields like "primary driver"/"driven" (rationale,
-# theme, evidence, evidence_basis) and "increase"/"drive"/"generate" in hypothesis/
-# success_metric - even when those hypothesis/success_metric uses were legitimate test
-# framing ("will drive higher engagement than..."). This class locks in the fix:
-# observational fields (rationale/evidence/theme/evidence_basis) stay strict in every
-# tense; hypothesis/success_metric/variable_to_test/test_name accept a wider set of
-# comparison framings ("than", "compared to", "relative to", "target:", "success if")
-# without needing the literal word "whether"; and a PAST-TENSE claim of an already-
-# observed result is a hard violation everywhere, even inside a test-design field.
-class TestRealRunFailureRegression(unittest.TestCase):
-    def test_primary_driver_in_rationale_is_still_hard_violation(self):
-        resp = make_strategy_response(
-            opportunity_overrides={"rationale": "Instructor quality is the primary driver of engagement."}
+            opportunity_overrides={"interpretation": "Educational format is proven to drive engagement."}
         )
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
 
-    def test_past_tense_driven_in_rationale_is_still_hard_violation(self):
-        resp = make_strategy_response(
-            opportunity_overrides={"rationale": "Engagement was driven by testimonials in this sample."}
-        )
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    def test_drive_in_theme_label_is_still_hard_violation(self):
+    def test_carousel_cannot_guarantee_allowed_in_creative_format_field(self):
+        # recommended_formats[2].rationale (old) -> "format" is now a creative label,
+        # this kind of format-mechanics reasoning belongs there, not in interpretation.
         resp = make_strategy_response()
-        resp["strategy_themes"][0]["theme"] = "Content that drives engagement"
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    def test_driving_in_theme_evidence_is_still_hard_violation(self):
-        resp = make_strategy_response()
-        resp["strategy_themes"][0]["evidence"] = "Named-instructor posts are driving stronger comment activity."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    def test_driven_in_format_rationale_is_still_hard_violation(self):
-        resp = make_strategy_response()
-        resp["recommended_formats"][0]["rationale"] = "This format has driven stronger saves in the sample."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    def test_evidence_basis_stays_strict_for_unhedged_drive(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["evidence_basis"] = "This pattern appears to drive stronger saves across the sample."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    def test_evidence_basis_stays_strict_for_past_tense_driven(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["evidence_basis"] = "Top posts were driven primarily by testimonial framing."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    def test_hypothesis_drive_allowed_with_comparison(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["hypothesis"] = (
-            "Named instructor spotlights will drive higher engagement than comparable "
-            "generic testimonials."
+        resp["recommended_formats"][0]["format"] = (
+            "Carousel format, which allows brand-controlled layout that reels' algorithm cannot guarantee"
         )
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertEqual(violations["hard"], [])
 
-    def test_success_metric_increase_allowed_with_compared_to(self):
+    def test_carousel_cannot_guarantee_still_violation_if_placed_in_interpretation(self):
         resp = make_strategy_response()
-        resp["recommended_tests"][0]["success_metric"] = "Engagement increases by 15% compared to the baseline average."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-
-    def test_success_metric_increase_allowed_with_relative_to(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["success_metric"] = "Booking inquiries increase by 20% relative to the control period."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-
-    def test_success_metric_generate_allowed_with_than(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["success_metric"] = "This format will generate more inquiries than the comparison group."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-
-    def test_success_metric_increase_without_comparison_is_still_hard_violation(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["success_metric"] = "Engagement will increase."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    def test_past_tense_result_claim_in_success_metric_always_hard_violation(self):
-        # Example E: a claimed *already observed* result is never allowed, even inside
-        # a test-design field with comparison language.
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["success_metric"] = (
-            "The discount increased booking inquiries by 20% compared to baseline."
+        resp["recommended_formats"][0]["interpretation"] = (
+            "Carousel format allows brand-controlled layout that reels' algorithm cannot guarantee."
         )
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
 
-    def test_past_tense_generated_in_hypothesis_always_hard_violation(self):
+    def test_appears_to_drive_community_response_is_violation(self):
         resp = make_strategy_response()
-        resp["recommended_tests"][0]["hypothesis"] = "This format generated more bookings than the comparison group."
+        resp["recommended_formats"][0]["interpretation"] = "This format appears to drive community response and intent signaling."
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
 
-    def test_unsupported_recommendation_stated_as_fact_in_hypothesis_is_hard_violation(self):
-        # Example G: a bare, unhedged directional claim in a hypothesis field is still a
-        # violation - test-design fields widen the accepted hedge *phrases*, they do not
-        # exempt directional verbs entirely.
+    def test_click_through_rate_increases_without_test_verb_is_hypothesis_violation(self):
         resp = make_strategy_response()
-        resp["recommended_tests"][0]["hypothesis"] = "Instructor-focused content increases engagement."
+        resp["recommended_tests"][0]["hypothesis"] = "Click-through rate to booking page increases 15%+."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("test verb" in v for v in violations["hard"]))
+
+    def test_documented_top_engagement_driver_in_evidence_basis_is_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["evidence_basis"] = (
+            "No current dedicated instructor-spotlight content exists in the dataset, despite "
+            "instructor quality being a documented top engagement driver."
+        )
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
 
-    def test_proposed_experiment_in_hypothesis_is_allowed(self):
-        # Example F: the same claim, properly framed as a proposed test.
+    def test_increased_mentions_target_field_allowed(self):
+        # recommended_tests[4].success_metric (old, free prose) -> target (new,
+        # structural, creative field) - not causal-checked.
         resp = make_strategy_response()
-        resp["recommended_tests"][0]["hypothesis"] = "Test whether instructor-focused content increases engagement."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertEqual(violations["hard"], [])
-
-
-# --- Stage 6.3: false-positive reduction. The real Stage 4.1-driven run rejected
-# grammatically safe wording - compound adjectives ("scarcity-driven booking
-# windows"), a post's own already-observed metrics ("generating 3,266 likes"), a
-# verb-tense gap in the hedge regex ("tests whether" vs. only "test whether"), and a
-# test-design field using "Track..." without the literal word "whether"
-# ("Track DM inquiry volume for increase week-over-week"). This class locks in the 20
-# explicit cases from that hardening pass, using find_evidence_violations() directly
-# on minimal fixtures so each case tests exactly one thing.
-class TestFalsePositiveReduction(unittest.TestCase):
-    def _opportunity_violation(self, text):
-        resp = make_strategy_response(opportunity_overrides={"evidence": text})
-        return strat.find_evidence_violations(resp, VALID_POST_IDS)["hard"]
-
-    def _test_field_violation(self, field, text):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0][field] = text
-        return strat.find_evidence_violations(resp, VALID_POST_IDS)["hard"]
-
-    # 1-5: observational claims must remain violations
-    def test_1_drives_engagement_is_violation(self):
-        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("This drives engagement.")))
-
-    def test_2_primary_driver_of_engagement_is_violation(self):
-        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("This is the primary driver of engagement.")))
-
-    def test_3_drove_engagement_is_violation(self):
-        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("This drove engagement.")))
-
-    def test_4_generated_bookings_is_violation(self):
-        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("This generated bookings.")))
-
-    def test_5_increased_bookings_is_violation(self):
-        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("This increased bookings.")))
-
-    # 6-9: compound adjectives must not be flagged
-    def test_6_scarcity_driven_booking_windows_allowed(self):
-        self.assertEqual(self._opportunity_violation("Scarcity-driven booking windows aligned with the season."), [])
-
-    def test_7_narrative_driven_reels_allowed(self):
-        self.assertEqual(self._opportunity_violation("Narrative-driven reels featuring career transformation."), [])
-
-    def test_8_weather_driven_dive_conditions_allowed(self):
-        self.assertEqual(self._opportunity_violation("Weather-driven dive conditions are mentioned in captions."), [])
-
-    def test_9_urgency_driven_cta_allowed(self):
-        self.assertEqual(self._opportunity_violation("Urgency-driven CTAs appear in the top post."), [])
-
-    # 10-13: test-design/success-metric framings must be allowed
-    def test_10_test_whether_bookings_increase_allowed(self):
-        self.assertEqual(self._test_field_violation("hypothesis", "Test whether bookings increase after this change."), [])
-
-    def test_11_measure_whether_inquiries_increase_compared_to_baseline_allowed(self):
-        self.assertEqual(
-            self._test_field_violation("success_metric", "Measure whether inquiries increase compared to baseline."), []
-        )
-
-    def test_12_track_dm_inquiry_volume_for_increase_week_over_week_allowed(self):
-        self.assertEqual(
-            self._test_field_violation("success_metric", "Track DM inquiry volume for increase week-over-week during test."),
-            [],
-        )
-
-    def test_13_target_20_percent_increase_vs_baseline_allowed(self):
-        self.assertEqual(self._test_field_violation("success_metric", "Target: 20% increase vs baseline"), [])
-
-    # 14-16: retrospective/proven claims must remain violations even in test-design fields
-    def test_14_campaign_increased_bookings_is_violation(self):
-        self.assertTrue(
-            any("causal" in v.lower() for v in self._test_field_violation("success_metric", "The campaign increased bookings."))
-        )
-
-    def test_15_campaign_generated_bookings_is_violation(self):
-        self.assertTrue(
-            any("causal" in v.lower() for v in self._test_field_violation("hypothesis", "The campaign generated bookings."))
-        )
-
-    def test_16_test_proved_an_increase_is_violation(self):
-        self.assertTrue(
-            any("causal" in v.lower() for v in self._test_field_violation("evidence_basis", "The test proved an increase in bookings."))
-        )
-
-    # 17-18: describing a post's own already-observed metrics must be allowed
-    def test_17_has_likes_and_comments_allowed(self):
-        self.assertEqual(self._opportunity_violation("DWyk4T6E5OF has 3,266 likes and 49 comments."), [])
-
-    def test_18_generating_likes_and_comments_allowed(self):
-        self.assertEqual(
-            self._opportunity_violation("DWyk4T6E5OF, generating 3,266 likes and 49 comments, shows strong engagement."), []
-        )
-
-    # 19-20: competitor claim protection stays, but requires_verification=true + a
-    # real verification_reason is now an accepted alternative to rewriting the text.
-    def test_19_competitor_statement_without_verification_is_protected(self):
-        resp = make_strategy_response(
-            opportunity_overrides={
-                "rationale": "No competitor addresses this angle.",
-                "requires_verification": False,
-            }
-        )
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
-
-    def test_20_competitor_statement_with_verification_is_allowed(self):
-        resp = make_strategy_response(
-            opportunity_overrides={
-                "rationale": "No competitor addresses this angle.",
-                "requires_verification": True,
-                "verification_reason": "No competitor dataset was supplied; needs manual research.",
-            }
+        resp["recommended_tests"][0]["target"] = (
+            "Increased mentions of safety/certification reassurance as decision factors in inquiry text"
         )
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertEqual(violations["hard"], [])
 
-    # Real production failures, verbatim, as an end-to-end sanity check beyond the
-    # word-level cases above.
-    def test_real_failure_tests_whether_verb_form_is_allowed(self):
-        text = (
-            "This format tests whether dedicating content to specific instructors "
-            "strengthens trust signals and drives repeat-viewer familiarity with the "
-            "FlyingFish team."
-        )
-        self.assertEqual(self._opportunity_violation(text), [])
-
-    def test_real_failure_driving_advance_bookings_remains_violation(self):
-        # This one is a genuine unsupported claim (bookings, not an engagement metric,
-        # with no test framing) and must still be rejected - not every real-run
-        # failure was a false positive.
-        text = (
-            "Seasonal countdown messaging is associated with notably high comment "
-            "engagement and community anticipation, driving advance bookings during "
-            "seasonal transitions."
-        )
-        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation(text)))
-
-
-# --- Stage 6.4: compound-sentence "whether" hedging + full regression matrix. The
-# real run's variable_to_test fields used natural compound phrasing like "Compare A
-# (generic testimonials) and whether B generates C" - the hedge verb ("compare") isn't
-# immediately adjacent to "whether", so the old _WHETHER_HEDGE_RE (which required that
-# adjacency) rejected legitimate test framing. Fixed by _whether_hedged()/
-# _trend_hedged(): in test-design fields specifically, a bare "whether" anywhere in the
-# sentence is enough (these fields are inherently prospective by role), while
-# observational fields keep the stricter adjacent-verb requirement unchanged. This
-# class also re-covers the full 20-item matrix from this request end to end.
-class TestCompoundSentenceHedging(unittest.TestCase):
-    def _opportunity_violation(self, field, text):
-        resp = make_strategy_response(opportunity_overrides={field: text})
-        return strat.find_evidence_violations(resp, VALID_POST_IDS)["hard"]
-
-    def _test_field_violation(self, field, text):
+    def test_generate_weekly_report_action_item_allowed(self):
         resp = make_strategy_response()
-        resp["recommended_tests"][0][field] = text
-        return strat.find_evidence_violations(resp, VALID_POST_IDS)["hard"]
-
-    def test_real_failure_variable_to_test_generates_with_non_adjacent_whether_allowed(self):
-        text = (
-            "generic testimonials without instructor identity) and whether named "
-            "instructor content generates request-for-specific-instructor inquiries"
-        )
-        self.assertEqual(self._test_field_violation("variable_to_test", text), [])
-
-    def test_real_failure_variable_to_test_increases_with_non_adjacent_whether_allowed(self):
-        text = (
-            "baseline general content) and whether trust-focused messaging increases "
-            "DM inquiries about certifications, safety, and operator validation"
-        )
-        self.assertEqual(self._test_field_violation("variable_to_test", text), [])
-
-    def test_bare_whether_does_not_hedge_strict_observational_fields(self):
-        # The compound-sentence exemption is scoped to is_test_field=True only -
-        # rationale/evidence must still require an adjacent hedge verb, not just the
-        # bare word "whether" appearing anywhere.
-        text = "The report notes whether this format drives higher engagement."
-        self.assertTrue(any("causal" in v.lower() for v in self._opportunity_violation("evidence", text)))
-
-    def test_proven_to_is_still_a_strong_claim_violation(self):
-        resp = make_strategy_response()
-        resp["recommended_tests"][0]["evidence_basis"] = "This is proven to work in every case."
-        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
-        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
-
-    # --- 1-8: observational-field and competitor violations ---
-    def test_1_primary_engagement_driver_violation_in_rationale(self):
-        v = self._opportunity_violation("rationale", "Instructor quality is the primary engagement driver.")
-        self.assertTrue(any("causal" in x.lower() for x in v))
-
-    def test_2_engagement_driver_violation_in_evidence(self):
-        v = self._opportunity_violation("evidence", "Stage 4.1 identifies this as a documented engagement driver.")
-        self.assertTrue(any("causal" in x.lower() for x in v))
-
-    def test_3_driven_violation_in_observational_field(self):
-        v = self._opportunity_violation("rationale", "This format has driven stronger saves.")
-        self.assertTrue(any("causal" in x.lower() for x in v))
-
-    def test_4_drive_violation_in_observational_field(self):
-        v = self._opportunity_violation("rationale", "This format will drive stronger saves.")
-        self.assertTrue(any("causal" in x.lower() for x in v))
-
-    def test_5_generates_violation_in_observational_field(self):
-        v = self._opportunity_violation("evidence", "This messaging generates high comment engagement.")
-        self.assertTrue(any("causal" in x.lower() for x in v))
-
-    def test_6_increases_violation_in_observational_field(self):
-        v = self._opportunity_violation("rationale", "Site-specific content increases SEO value.")
-        self.assertTrue(any("causal" in x.lower() for x in v))
-
-    def test_7_competitor_differentiation_violation_unless_verified(self):
-        v = self._opportunity_violation("rationale", "This may differentiate FlyingFish from competitors.")
-        self.assertTrue(any("competitor" in x.lower() for x in v))
-
-    def test_8_competitor_comparison_in_target_audience_violation(self):
-        v = self._opportunity_violation("target_audience", "Potential bookers evaluating FlyingFish against competitors.")
-        self.assertTrue(any("competitor" in x.lower() for x in v))
-
-    # --- 9-12: test-design framing ---
-    def test_9_increases_compared_with_baseline_allowed_in_success_metric(self):
-        self.assertEqual(
-            self._test_field_violation("success_metric", "Inquiries increase compared with baseline."), []
-        )
-
-    def test_10_measure_whether_inquiries_increase_allowed_in_variable_to_test(self):
-        self.assertEqual(
-            self._test_field_violation("variable_to_test", "Measure whether inquiries increase during the test."), []
-        )
-
-    def test_11_test_whether_x_drives_y_allowed_in_hypothesis(self):
-        self.assertEqual(
-            self._test_field_violation("hypothesis", "Test whether named-instructor content drives higher engagement than generic testimonials."),
-            [],
-        )
-
-    def test_12_past_tense_drove_is_violation_even_in_test_field(self):
-        v = self._test_field_violation("hypothesis", "Named-instructor content drove higher engagement than generic testimonials.")
-        self.assertTrue(any("causal" in x.lower() for x in v))
-
-    # --- 13-16: compound adjectives and observed-metric exemptions ---
-    def test_13_scarcity_driven_allowed(self):
-        self.assertEqual(self._opportunity_violation("evidence", "Scarcity-driven booking windows appear in the caption."), [])
-
-    def test_14_narrative_driven_allowed(self):
-        self.assertEqual(self._opportunity_violation("rationale", "Narrative-driven reels feature career transformation."), [])
-
-    def test_15_generating_likes_allowed(self):
-        self.assertEqual(
-            self._opportunity_violation("evidence", "DWyk4T6E5OF, generating 3,266 likes and 49 comments, shows strong engagement."), []
-        )
-
-    def test_16_generating_bookings_not_automatically_allowed(self):
-        v = self._opportunity_violation("evidence", "This format is generating 40 bookings this month.")
-        self.assertTrue(any("causal" in x.lower() for x in v))
-
-    # --- 17-20: competitor verification paths ---
-    def test_17_verified_competitor_claim_with_requires_verification_allowed(self):
-        resp = make_strategy_response(
-            opportunity_overrides={
-                "rationale": "This may differentiate FlyingFish from competitors.",
-                "requires_verification": True,
-                "verification_reason": "No competitor dataset was supplied; needs manual research.",
-            }
-        )
+        resp["action_plan"] = ["[NEXT] Generate weekly performance report to marketing team comparing actual results to test hypotheses."]
         violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
         self.assertEqual(violations["hard"], [])
-
-    def test_18_hedged_competitor_statement_allowed(self):
-        v = self._opportunity_violation(
-            "rationale", "Whether this differentiates FlyingFish from competitors requires competitor research."
-        )
-        self.assertEqual(v, [])
-
-    def test_19_driving_advance_bookings_violation(self):
-        v = self._opportunity_violation(
-            "rationale",
-            "Seasonal countdown messaging is associated with notably high comment engagement, driving advance bookings.",
-        )
-        self.assertTrue(any("causal" in x.lower() for x in v))
-
-    def test_20_differentiates_from_competitors_violation_without_verification(self):
-        v = self._opportunity_violation("rationale", "Clear course explanations differentiate from unstructured competitors.")
-        self.assertTrue(any("competitor" in x.lower() for x in v))
 
 
 # --- error message extraction (Step 2 fix: real Anthropic error, never a bare status) ---
@@ -1020,7 +775,7 @@ class MainEndToEndMixin:
         return exit_code, mock_client.messages.create.call_args_list
 
 
-# --- 4: dry-run makes no API call ---
+# --- dry-run makes no API call ---
 class TestDryRun(MainEndToEndMixin, unittest.TestCase):
     def test_dry_run_makes_no_api_call(self):
         with patch("anthropic.Anthropic") as mock_client_cls:
@@ -1035,7 +790,7 @@ class TestDryRun(MainEndToEndMixin, unittest.TestCase):
         self.assertFalse(self.output_path.exists())
 
 
-# --- 5: valid Claude response end-to-end ---
+# --- valid Claude response end-to-end ---
 class TestValidResponseEndToEnd(MainEndToEndMixin, unittest.TestCase):
     def test_valid_response_succeeds_with_one_call(self):
         exit_code, calls = self.run_main([make_completed_stream("end_turn", make_strategy_response())])
@@ -1048,7 +803,7 @@ class TestValidResponseEndToEnd(MainEndToEndMixin, unittest.TestCase):
         self.assertIn("content_opportunities", output)
 
 
-# --- 7: truncated response ---
+# --- truncated response ---
 class TestTruncation(MainEndToEndMixin, unittest.TestCase):
     def test_truncation_then_success(self):
         exit_code, calls = self.run_main(
@@ -1065,10 +820,10 @@ class TestTruncation(MainEndToEndMixin, unittest.TestCase):
         self.assertFalse(self.output_path.exists())
 
 
-# --- 10/11/12: retry after invalid response, second failure, no partial output ---
+# --- retry after invalid response, second failure, no partial output ---
 class TestRetryAndFailure(MainEndToEndMixin, unittest.TestCase):
     def test_hard_violation_then_clean_retry_succeeds(self):
-        bad = make_strategy_response(opportunity_overrides={"evidence": "No competitor addresses this."})
+        bad = make_strategy_response(opportunity_overrides={"interpretation": "No competitor addresses this."})
         good = make_strategy_response()
         exit_code, calls = self.run_main([make_completed_stream("end_turn", bad), make_completed_stream("end_turn", good)])
         self.assertEqual(exit_code, 0)
@@ -1078,7 +833,7 @@ class TestRetryAndFailure(MainEndToEndMixin, unittest.TestCase):
         self.assertTrue(self.output_path.exists())
 
     def test_hard_violation_persists_fails_cleanly(self):
-        bad = make_strategy_response(opportunity_overrides={"evidence": "No competitor addresses this."})
+        bad = make_strategy_response(opportunity_overrides={"interpretation": "No competitor addresses this."})
         exit_code, calls = self.run_main([make_completed_stream("end_turn", bad), make_completed_stream("end_turn", bad)])
         self.assertEqual(exit_code, 1)
         self.assertEqual(len(calls), 2)
@@ -1090,11 +845,20 @@ class TestRetryAndFailure(MainEndToEndMixin, unittest.TestCase):
         self.assertFalse(self.output_path.exists())
         self.assertEqual(list(Path(self.tmpdir.name).glob("strategy*")), [])
 
+    def test_retry_count_bounded_at_two_calls(self):
+        # Even three consecutive hard violations must never trigger a third API call.
+        bad = make_strategy_response(opportunity_overrides={"interpretation": "No competitor addresses this."})
+        exit_code, calls = self.run_main([make_completed_stream("end_turn", bad), make_completed_stream("end_turn", bad), make_completed_stream("end_turn", bad)])
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(calls), 2)
 
-# --- Soft violation auto-corrected without wasting a retry ---
+
+# --- soft violation auto-corrected without wasting a retry ---
 class TestSoftViolationAutoCorrection(MainEndToEndMixin, unittest.TestCase):
     def test_soft_violation_succeeds_on_first_call(self):
-        resp = make_strategy_response(opportunity_overrides={"evidence": "Mentions PADI certification.", "requires_verification": False})
+        resp = make_strategy_response(
+            opportunity_overrides={"observation": "Mentions PADI certification.", "requires_verification": False}
+        )
         exit_code, calls = self.run_main([make_completed_stream("end_turn", resp)])
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(calls), 1)
@@ -1139,7 +903,7 @@ class TestApiErrorSurfacesRealMessage(MainEndToEndMixin, unittest.TestCase):
         self.assertFalse(self.output_path.exists())
 
 
-# --- 18: existing Stage 4.1 output remains untouched ---
+# --- existing Stage 4.1 output remains untouched ---
 class TestStage41Untouched(MainEndToEndMixin, unittest.TestCase):
     def test_stage41_file_unchanged_after_run(self):
         before = self.stage41_path.read_text()

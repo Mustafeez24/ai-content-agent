@@ -11,6 +11,24 @@ Answers: "Based on our actual Instagram performance data, what content should
 FlyingFish consider creating next?" - grounded in Stage 4.1 evidence, not generic
 social media advice.
 
+ARCHITECTURE (redesigned - see git history for the earlier prose-policing approach):
+every evidence-bearing claim is split into a short "observation" (a directly-citable
+fact - a post_id and its number) and a short "interpretation" (a hedged association,
+never a causal claim), instead of one long free-form "rationale"/"evidence" paragraph.
+Proposed tests ("hypothesis") are validated structurally - they must start with an
+explicit test verb (Test/Measure/Compare/Evaluate/Determine/Track/Assess) - rather
+than by scanning for causal words, since the field's own required shape is what proves
+it's a hypothesis, not a stated fact. Creative fields (content labels, hooks, CTAs,
+audience descriptions, action-plan items) are not evidentiary claims and are never
+checked for causal language at all - they still get the universal competitor-claim and
+calendar-period checks, since those are unsafe in any field. This replaced an earlier
+design that tried to police long free-form prose with an ever-growing causal-language
+regex: the regex kept finding new false positives ("Generate a report" flagged as a
+causal claim; "scarcity-driven" flagged as an unsupported claim) and false negatives,
+because prose is unbounded and a regex cannot understand context. Constraining what
+each field is allowed to contain removes most of that ambiguity structurally instead
+of trying to out-regex natural language.
+
 Usage:
     source venv/bin/activate
     python scripts/content_strategy.py
@@ -108,198 +126,115 @@ language instead, such as "the next 1-2 weeks" or "the next 4 weeks".
 
 You will receive the Stage 4.1 Content Scout report: verified, evidence-classified \
 findings about FlyingFish's actual Instagram performance. Your job is to convert that \
-evidence into concrete content opportunities (formats, hooks, angles, CTAs) - NOT to \
-generate generic social media advice, and NOT to introduce new facts, numbers, posts, \
-audience data, or business claims that were not in the report you were given.
+evidence into concrete content opportunities - NOT generic social media advice, and NOT \
+new facts, numbers, posts, audience data, or business claims not in the report you were given.
 
-"known_post_ids" lists every post_id that Stage 4.1 already verified against real data. \
-You must NEVER cite, in any evidence_post_ids field, a post_id that is not in that list.
+"known_post_ids" lists every post_id Stage 4.1 already verified against real data. \
+NEVER cite, in any evidence_post_ids field, a post_id that is not in that list.
 
-EVIDENCE HIERARCHY - every claim must be classified as exactly one of:
-- OBSERVED: directly supported by Stage 4.1 evidence.
-- INTERPRETATION: a reasonable interpretation of observed data, clearly phrased as
-  interpretation, not as fact.
-- HYPOTHESIS: a proposed explanation or testable idea. Never present it as established
-  fact.
-- RECOMMENDATION: a proposed action based on the evidence. It is NOT proof that the
-  action will produce a particular business outcome.
-Never upgrade a hypothesis into a stated fact. Never say "people love this" or "this
-content causes higher engagement" - say "this format was associated with stronger
-engagement in the analyzed sample" or "this is a hypothesis worth testing".
+OUTPUT IS STRUCTURED, NOT PROSE. Every field has a narrow job. Keep every string SHORT \
+- one sentence or a short phrase, never a paragraph. Do not repeat the same point \
+across multiple fields.
 
-LANGUAGE RULES - the Instagram engagement dataset shows association, not causation.
-NEVER claim that engagement data proves causation, and NEVER phrase a proposed test's
-expected outcome in the past tense as if it already happened.
+EVIDENCE FIELDS (content_opportunities, strategy_themes, recommended_formats):
+- "observation": ONE short factual sentence citing a specific post_id and its actual \
+number(s) from the data you were given, e.g. "DH3VdAmCS5g had 1,119 likes." State the \
+number and stop - never interpret, never explain why, never use a verb like drives/ \
+generates/increases/causes here.
+- "interpretation": ONE short sentence using association language only - "is \
+associated with", "appears alongside", "performed strongly in this sample", "was \
+observed in". NEVER use drives, driving, drove, driven, causes, proves, guarantees, \
+results in, leads to, increases, decreases, converts, generates, or "driver"/"drivers" \
+as a noun (not "primary driver", not "engagement driver") - in any tense, not softened \
+with "may" or "likely" either. If you cannot state something as a plain association, \
+put it in "hypothesis" instead.
 
-For "opportunity"/"rationale"/"evidence"/"theme"/"content_angle"/"core_message" and
-recommended_tests' "evidence_basis" - the fields that describe what the dataset
-ALREADY shows - avoid drives, driving, drove, driven, causes, proves, guarantees,
-results in, leads to, increases, decreases, converts, generates, primary driver,
-engagement driver ENTIRELY, in any tense. Use association language instead:
-"is associated with", "appears alongside", "was observed in", "performed strongly in
-this sample", "appears frequently in high-performing posts", "could indicate", "may
-be worth testing".
-  Bad: "Instructor quality is the primary driver of engagement."
-  Good: "Instructor praise appears frequently in high-performing posts; test whether
-  dedicated instructor content is associated with stronger engagement."
-  Bad: "This format has driven stronger saves in the sample."
-  Good: "This format is associated with stronger saves in the observed sample."
-  Bad: "...driving advance bookings during seasonal transitions."
-  Good: "...is associated with notably high comment engagement; test whether this
-  format is associated with a change in advance booking inquiries."
-  Bad: "Instructor quality appears as the primary engagement driver in the
-  top-performing post." / "...as a documented engagement driver in top testimonials."
-  Good: "The top-performing post combines instructor praise with 3,266 likes and 49
-  comments." / "Instructor praise is a recurring feature of the strongest testimonial
-  evidence."
-  Bad: "...are proven to drive high engagement and conversion-oriented audience
-  response."
-  Good: "...received 1,119 likes and used time-limited discount messaging with a
-  direct CTA. This is an observed example to test in future promotional content."
-  Bad: "...and drives notably high comment ratio (5.5% engagement)."
-  Good: "...used countdown messaging for seasonal reopening, with a reported 5.5%
-  engagement rate and a comment ratio notably above the sample average."
-  Bad: "Site-specific content increases location specificity and SEO value."
-  Good: "Site-specific content adds explicit location information to the post. Its
-  effect on SEO performance should be treated as a hypothesis and measured."
-Never use "driver"/"drivers" as a noun to describe a factor at all in these fields -
-not "primary driver", not "engagement driver", not "top driver", not "documented
-driver" - in any phrasing. This applies to evidence_basis just as much as
-rationale/evidence: it must justify a proposed test using only already-observed
-numbers and associative language, never "driver" language or an unhedged
-drives/generates/increases claim.
+content_opportunities also has:
+- "pattern": a short label for what was observed (e.g. "time-limited discount CTA", \
+"scarcity-driven booking window") - a phrase, not a sentence. Compound adjectives like \
+"scarcity-driven"/"narrative-driven"/"weather-driven"/"data-driven" are fine here and \
+anywhere else - they describe content characteristics, not a causal claim.
+- "hypothesis": a proposed FUTURE test - see HYPOTHESIS FORMAT below.
 
-Compound adjectives like "scarcity-driven", "narrative-driven", "weather-driven",
-"urgency-driven", "data-driven", "location-driven" are fine wherever they naturally
-read - they describe content characteristics, not a claim that the dataset proved
-causation. A hyphenated "X-driven <noun>" is not covered by the drives/driven
-restriction above. Likewise, describing a specific post's own already-observed
-numbers ("generating 3,266 likes and 49 comments", "has 3,266 likes", "received 1,119
-likes") is fine - that is not a causal claim, it is citing Stage 4.1's own verified
-numbers for that post_id. This does NOT extend to bookings, revenue, leads,
-conversions, customer acquisition, enrollment, ROI, or inquiry quality - "generated
-bookings" or "increased inquiries" is still a forbidden unsupported claim, because
-those outcomes are never established by this dataset.
+HYPOTHESIS FORMAT (content_opportunities.hypothesis and recommended_tests.hypothesis): \
+must start with one of these exact words: Test, Measure, Compare, Evaluate, Determine, \
+Track, Assess (e.g. "Test whether...", "Compare A against B and measure whether..."). \
+That required opening is what proves the sentence is a proposed test rather than a \
+stated fact, so once it's there you do not need to hedge every verb inside the \
+sentence too. Never phrase it in the past tense (never "increased"/"drove"/ \
+"generated" describing a result - those claim something already happened, which this \
+dataset does not establish for a test that hasn't run).
 
-For recommended_tests' "test_name"/"hypothesis"/"variable_to_test"/"success_metric" -
-the fields that describe a test that has NOT been run yet - phrase every claim as a
-proposed comparison, using "Test whether...", "Measure whether...", "Evaluate
-whether...", "Target: ...", "Success if...", or an explicit "X compared to/relative
-to/versus/than Y" comparison. Present-tense directional words (increase, drive,
-generate, decrease, convert, result in, lead to) are fine THERE as long as the
-sentence is framed as a proposed test this way - but NEVER in the past tense
-(increased, drove, generated, decreased, converted, resulted in, led to), because
-that claims a result the Instagram dataset does not contain.
-  Bad (hypothesis): "Named instructor spotlights will increase engagement and drive
-  bookings."
-  Good (hypothesis): "Test whether named instructor spotlights receive higher
-  engagement than comparable testimonials without an instructor focus."
-  Bad (success_metric): "Engagement increased." / "This generated more bookings."
-  Good (success_metric): "Measure whether likes increase by 15% compared to the
-  sample average." or "Target: 15% more saves than the comparison group."
-  Good (variable_to_test): "Compare generic testimonials without instructor identity
-  against named-instructor content, and measure whether specific-instructor inquiries
-  differ between the two." (the "whether" clause does not need to sit immediately
-  after "measure"/"test" - "Compare A and B, and measure whether C" is a valid single
-  proposed test)
+RECOMMENDED_TESTS also replaces one long "success metric" paragraph with three short \
+structural fields instead of a sentence:
+- "metric": what is measured, e.g. "click-through rate to booking page" or "DM inquiry volume".
+- "target": the target value/direction, e.g. "15% increase" or "at least 10 more inquiries".
+- "comparison": what it's measured against, e.g. "baseline" or "the account average".
+"evidence_basis" is the one recommended_tests field that follows the observation/ \
+interpretation rules above (short, factual, no drives/generates/increases/driver-as- \
+noun) - it must justify the test using only already-observed evidence, never a \
+comparative target (that's what metric/target/comparison are for).
 
-COMPETITOR CLAIMS - the Stage 4.1 report contains FlyingFish data only, never actual
-competitor data. Do NOT claim things like "FlyingFish differentiates from
-competitors", "competitors don't do this", "generic competitors", "unstructured
-competitors", "better than competitors", or "competitive advantage over competitors".
-If an idea genuinely involves differentiation, phrase it as "a potential
-differentiation angle; competitor validation required" or "could be tested as a
-differentiation angle, but competitor data is required before making comparative
-claims" - and set requires_verification=true with a verification_reason explaining
-that competitor data is needed.
-  Bad: "FlyingFish's structured, professional positioning (vs. unstructured
-  competitors) is a differentiation opportunity."
-  Good: "FlyingFish's structured, professional positioning may be a potential
-  differentiation angle; competitor validation required." (with
-  requires_verification=true and a verification_reason explaining why)
-  Bad: "...may differentiate FlyingFish from competitors positioned only for
-  experienced divers." (adding "may" does NOT make an unverified claim about how
-  competitors are positioned acceptable - you do not have that data)
-  Good: "Systematizing this format addresses a documented core audience concern. Any
-  differentiation from competitors requires competitor research and validation."
-  Bad (target_audience): "...potential bookers evaluating FlyingFish against
-  competitors."
-  Good (target_audience): "...potential bookers evaluating training options." (drop
-  the competitor comparison entirely - target_audience describes FlyingFish's
-  audience, not a competitive claim)
-  Bad: "Goa's competitive scuba market likely drives prospective customer hesitation
-  and trust barriers."
-  Good: "The current dataset does not establish competitor positioning or customer
-  hesitation. Any trust-barrier or competitive-market hypothesis requires external
-  market research." (set requires_verification=true with a verification_reason)
-If you reference competitors at all without rewriting into that hedged phrasing, you
-MUST set requires_verification=true and write a real verification_reason - an
-unhedged competitor mention with requires_verification left false is always rejected,
-regardless of hedge words like "may" or "likely" attached to it.
+CREATIVE FIELDS are not evidence and are NEVER checked for causal language - write \
+them naturally: opportunity, pattern, recommended_format, target_audience, \
+suggested_cta, theme, format, test_name, variable_to_test, audience, \
+suggested_duration, metric, target, comparison. They still may never state an \
+unverified competitor fact or reference a specific calendar quarter (see below).
 
-BUSINESS OUTCOME CLAIMS - the supplied dataset contains Instagram engagement
-observations only. It does NOT establish bookings, booking conversions, revenue,
-leads, customer acquisition, enrollment, inquiry quality, conversion rate, or ROI.
-Never present those as established outcomes.
-  Bad: "Educational content drives bookings."
-  Good: "Educational content showed strong engagement in this sample; test whether
-  similar content is associated with higher-intent inquiries."
-  Bad: "This format increases bookings."
-  Good: "Test whether this format is associated with changes in booking inquiries."
-  Bad: "Non-swimmer content drives conversions."
-  Good: "Test whether non-swimmer-focused content is associated with higher inquiry
-  volume from that audience."
+ACTION PLAN: action_plan items describe an action to take, not a claim about evidence \
+- they are never checked for causal language either. Normal action verbs (generate, \
+create, publish, monitor, compare, review, test, measure, track, document, schedule) \
+are expected and fine, e.g. "Generate a weekly report comparing results to test \
+hypotheses" is an instruction, not a claim. Prefix EVERY item with exactly one of \
+"[IMMEDIATE] ", "[NEXT] ", or "[LATER] " (including the brackets and trailing space).
 
-RECOMMENDED TESTS - each test must stay genuinely useful: state what to change, what
-comparison to make, what metric to measure, and what observation would support/reject
-the hypothesis (see the test_name/hypothesis/variable_to_test/success_metric guidance
-in LANGUAGE RULES above for exactly how to phrase these). If a test mentions bookings
-or conversions, make explicit that these are FUTURE MEASUREMENT TARGETS the Instagram
-dataset does not itself establish - never a promised result.
+COMPETITOR CLAIMS - the Stage 4.1 report contains FlyingFish data only, never actual \
+competitor data. Never state a specific fact about how competitors are positioned or \
+what they do, in ANY field - not even softened with "may" or "likely". If \
+differentiation is worth raising, phrase it as "Potential differentiation; competitor \
+validation required." or "Requires competitor research before making a comparative \
+claim." and set requires_verification=true with a verification_reason explaining that \
+competitor data is needed. An unhedged competitor mention with requires_verification \
+left false is always rejected, in every field including target_audience and action_plan.
 
-ACTION PLAN - action items describe an action and how to measure it, never a claimed
-causal effect.
-  Bad: "Identify which formats drive highest-intent inquiries."
-  Better: "Track inquiry source and content theme to measure which formats are
-  associated with higher-intent inquiries."
+BUSINESS OUTCOME CLAIMS - the dataset contains Instagram engagement observations only. \
+It does NOT establish bookings, booking conversions, revenue, leads, customer \
+acquisition, enrollment, inquiry quality, conversion rate, or ROI as historical facts. \
+A test's "target"/"metric"/"comparison" may reference these as a FUTURE measurement \
+target - that is exactly what those fields are for - but "observation"/ \
+"interpretation"/"evidence_basis" must never state them as an already-established outcome.
 
-HARD RULES:
-1. Never fabricate Instagram numbers, post IDs, captions, audience demographics,
-   business facts, competitor behavior, market/tourism statistics, customer
-   motivations, or seasonal performance claims - use only what Stage 4.1 gave you.
-2. Never claim causation - see LANGUAGE RULES above.
-3. Never make unhedged competitor claims - see COMPETITOR CLAIMS above.
-4. Never state a business fact (certifications, partnerships, pricing, guarantees,
-   safety/market claims) as verified unless it was explicitly supplied as verified
-   context - it was not in this run. If referenced, set requires_verification=true
-   and explain what needs verification.
-5. When a claim rests on a small number of posts, state the sample size and avoid
-   universal language ("always", "every post") - confidence should not be "high"
-   when sample_size is 1 or 2.
-6. Do not generate generic advice such as "post consistently", "use trending
-   hashtags", "create engaging content", or "post reels because reels perform well" -
-   every opportunity, theme, and format must connect to a specific piece of Stage 4.1
-   evidence (a pattern, a top-performing post, a gap, or an opportunity already found).
-7. Any specific numeric target (engagement %, likes) you propose is a hypothesis to
-   test, never a predicted outcome - it belongs only in recommended_tests, labeled
-   target_type: "proposed_test_target".
-8. If something cannot be established from the supplied report, say so explicitly -
-   prefer "not established by this dataset" over speculation.
+EVIDENCE HIERARCHY: classify every content_opportunities/strategy_themes/ \
+recommended_formats item via evidence_type as exactly one of observed (directly \
+supported by Stage 4.1 evidence), interpretation (a reasonable reading of observed \
+data), hypothesis (a proposed, untested idea), or recommendation (a proposed action). \
+Match evidence_type to whichever of observation/interpretation/hypothesis actually \
+carries the claim.
 
-FIELD CONVENTIONS (the schema uses plain types for these - follow these conventions
+OTHER HARD RULES:
+1. Never fabricate Instagram numbers, post IDs, captions, audience demographics, \
+business facts, competitor behavior, market/tourism statistics, or seasonal \
+performance claims - use only what Stage 4.1 gave you.
+2. When a claim rests on a small number of posts, state the sample size and avoid \
+universal language ("always", "every post") - confidence should not be "high" when \
+sample_size is 1 or 2.
+3. Do not generate generic advice such as "post consistently", "use trending \
+hashtags", or "create engaging content" - every opportunity/theme/format must connect \
+to a specific piece of Stage 4.1 evidence.
+4. Any specific numeric target you propose belongs only in recommended_tests \
+(metric/target/comparison), labeled target_type: "proposed_test_target" - never \
+presented as a predicted outcome elsewhere.
+5. If something cannot be established from the supplied report, say so explicitly.
+
+FIELD CONVENTIONS (the schema uses plain types for these - follow these conventions \
 exactly, they are validated after your response is parsed):
 - "evidence_type" must be exactly one of: observed, interpretation, hypothesis, recommendation.
 - "confidence" must be exactly one of: high, medium, low.
 - "target_type" on every recommended_tests item must be exactly: proposed_test_target.
-- "sample_size" is an integer: the number of posts the claim is based on, or 0 if the
-  claim is not tied to a specific count of posts (0 is not a real sample size - it means
-  "not applicable", never claim 0 posts support something).
-- "verification_reason" is a string: your explanation when requires_verification is
-  true, or an empty string "" when requires_verification is false.
-- "action_plan" is a flat array of strings. Prefix EVERY item with exactly one of
-  "[IMMEDIATE] ", "[NEXT] ", or "[LATER] " (including the brackets and trailing space)
-  to indicate its priority/timeframe, e.g. "[IMMEDIATE] Draft one testimonial-style reel
-  in the next 1-2 weeks."
+- "sample_size" is an integer: the number of posts the claim is based on, or 0 if the \
+claim is not tied to a specific count of posts.
+- "verification_reason" is a string: your explanation when requires_verification is \
+true, or an empty string "" when requires_verification is false.
 
 Respond with ONLY a single valid JSON object (no markdown code fences, no commentary \
 before or after) matching exactly the schema you are given. For every evidence_post_ids \
@@ -320,9 +255,7 @@ CONTENT_STRATEGY_SYSTEM_PROMPT = _build_system_prompt()
 # plain type, structurally guaranteed to be present by output_config.format, but the
 # *allowed values* (evidence_type, confidence) and the *null convention* (sample_size=0,
 # verification_reason="") are enforced in Python by find_evidence_violations() /
-# normalize_evidence_item() below instead of in the schema. This does not weaken
-# validation - an invalid value here is now a hard violation, exactly like an invented
-# post_id - it just moves the check from the API's grammar compiler to our own code.
+# main() below instead of in the schema.
 _EVIDENCE_FIELDS = {
     "evidence_type": {"type": "string"},
     "evidence_post_ids": {"type": "array", "items": {"type": "string"}},
@@ -346,20 +279,18 @@ CONTENT_STRATEGY_RESPONSE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "opportunity": {"type": "string"},
-                    "rationale": {"type": "string"},
-                    "evidence": {"type": "string"},
+                    "observation": {"type": "string"},
+                    "pattern": {"type": "string"},
+                    "interpretation": {"type": "string"},
+                    "hypothesis": {"type": "string"},
                     "recommended_format": {"type": "string"},
                     "target_audience": {"type": "string"},
-                    "content_angle": {"type": "string"},
-                    "suggested_hook": {"type": "string"},
-                    "core_message": {"type": "string"},
                     "suggested_cta": {"type": "string"},
                     **_EVIDENCE_FIELDS,
                 },
                 "required": [
-                    "opportunity", "rationale", "evidence", "recommended_format",
-                    "target_audience", "content_angle", "suggested_hook", "core_message",
-                    "suggested_cta", *_EVIDENCE_FIELD_NAMES,
+                    "opportunity", "observation", "pattern", "interpretation", "hypothesis",
+                    "recommended_format", "target_audience", "suggested_cta", *_EVIDENCE_FIELD_NAMES,
                 ],
                 "additionalProperties": False,
             },
@@ -370,10 +301,11 @@ CONTENT_STRATEGY_RESPONSE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "theme": {"type": "string"},
-                    "evidence": {"type": "string"},
+                    "observation": {"type": "string"},
+                    "interpretation": {"type": "string"},
                     **_EVIDENCE_FIELDS,
                 },
-                "required": ["theme", "evidence", *_EVIDENCE_FIELD_NAMES],
+                "required": ["theme", "observation", "interpretation", *_EVIDENCE_FIELD_NAMES],
                 "additionalProperties": False,
             },
         },
@@ -383,10 +315,11 @@ CONTENT_STRATEGY_RESPONSE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "format": {"type": "string"},
-                    "rationale": {"type": "string"},
+                    "observation": {"type": "string"},
+                    "interpretation": {"type": "string"},
                     **_EVIDENCE_FIELDS,
                 },
-                "required": ["format", "rationale", *_EVIDENCE_FIELD_NAMES],
+                "required": ["format", "observation", "interpretation", *_EVIDENCE_FIELD_NAMES],
                 "additionalProperties": False,
             },
         },
@@ -401,7 +334,9 @@ CONTENT_STRATEGY_RESPONSE_SCHEMA = {
                     "variable_to_test": {"type": "string"},
                     "format": {"type": "string"},
                     "audience": {"type": "string"},
-                    "success_metric": {"type": "string"},
+                    "metric": {"type": "string"},
+                    "target": {"type": "string"},
+                    "comparison": {"type": "string"},
                     "suggested_duration": {"type": "string"},
                     "evidence_basis": {"type": "string"},
                     "evidence_post_ids": {"type": "array", "items": {"type": "string"}},
@@ -411,8 +346,9 @@ CONTENT_STRATEGY_RESPONSE_SCHEMA = {
                 },
                 "required": [
                     "test_name", "hypothesis", "target_type", "variable_to_test", "format",
-                    "audience", "success_metric", "suggested_duration", "evidence_basis",
-                    "evidence_post_ids", "confidence", "requires_verification", "verification_reason",
+                    "audience", "metric", "target", "comparison", "suggested_duration",
+                    "evidence_basis", "evidence_post_ids", "confidence",
+                    "requires_verification", "verification_reason",
                 ],
                 "additionalProperties": False,
             },
@@ -587,29 +523,33 @@ def parse_action_plan(items: list) -> dict:
     return buckets
 
 
-# Mechanical, regex-based safety checks against the response's actual text content -
-# structural safeguards, mirroring Stage 4.1's hardening. "Hard" violations mean the
-# claim itself is unsafe as worded; "soft" violations are missing metadata that can be
-# safely auto-corrected without discarding the claim.
+# --- Evidence-safety validation ---------------------------------------------------
 #
-# Causal-language detection distinguishes three things, per sentence:
-# 1. PAST-TENSE trend claims ("increased", "drove", "generated", "resulted in", "led
-#    to") always a hard violation, in every field, hedged or not - the Instagram
-#    dataset never establishes that a change already produced a measured outcome
-#    (a proposed test's hypothesis/success_metric describes a FUTURE measurement, so
-#    a past-tense verb there is still an unsupported claim that it already happened).
-# 2. PRESENT/BASE/GERUND trend words ("increases", "drives", "generating"...) - a hard
-#    violation unless the sentence is explicitly framed as a proposed test/measurement
-#    (see the hedge regexes below). In hypothesis/success_metric/variable_to_test/
-#    test_name specifically (is_test_field=True) - fields whose entire purpose is to
-#    describe a not-yet-run test - a wider set of comparative/target framings also
-#    counts as a hedge, since "Measure X compared to baseline" is exactly what those
-#    fields are for. evidence_basis stays strict (only "test/measure/... whether"
-#    exempts it) since it must justify the test using only already-observed evidence.
-# 3. Strong epistemic claims ("causes", "proves", "guarantees", "primary driver",
-#    "engagement driver") - a hard violation everywhere unless the sentence uses the
-#    universal "test/measure/... whether" hedge - never exempted by field alone, since
-#    these assert the strongest kind of certainty.
+# Every free-text field is assigned exactly one ROLE, and only that role's rules
+# apply to it - this is the core of the redesign: instead of one causal-language
+# regex trying to police every field the same way (and constantly getting the wrong
+# false positive/negative for whichever field it was actually applied to), each
+# field's role tells us up front what kind of content is even possible there.
+#
+#   "strict"     - observation/interpretation/evidence_basis: a claim about what the
+#                   dataset already shows. Never allowed to use causal/trend language
+#                   in any tense - there is no hedge that makes a causal claim safe in
+#                   a field whose whole job is to state only what was observed. (The
+#                   separate "hypothesis" field exists precisely for proposed tests.)
+#   "hypothesis" - content_opportunities.hypothesis / recommended_tests.hypothesis: a
+#                   proposed, not-yet-run test. Validated structurally (must start with
+#                   an explicit test verb) instead of by scanning for causal words -
+#                   past-tense claims of an already-observed result are still rejected.
+#   "creative"   - content/label fields (opportunity, pattern, recommended_format,
+#                   target_audience, suggested_cta, theme, format, test_name,
+#                   variable_to_test, audience, metric, target, comparison,
+#                   suggested_duration) and action_plan items: not evidentiary claims,
+#                   never causal-language-checked. Still checked for competitor claims
+#                   and hardcoded calendar periods, which are unsafe in any field.
+#
+# "Hard" violations mean the claim itself is unsafe as worded; "soft" violations are
+# missing metadata that can be safely auto-corrected without discarding the claim.
+
 _TREND_PRESENT_RE = re.compile(
     r"\b(drives?|driving)\b"
     r"|\b(increas(?:e|es|ing))\b"
@@ -632,37 +572,6 @@ _STRONG_CLAIM_RE = re.compile(
     r"|\b(guarantees?|guaranteeing|guaranteed)\b"
     r"|\bprimary\s+(?:engagement\s+)?drivers?\b"
     r"|\bengagement\s+drivers?\b",
-    re.IGNORECASE,
-)
-_BARE_WHETHER_RE = re.compile(r"\bwhether\b", re.IGNORECASE)
-# Every inflected form of the hedge verbs, not just the bare infinitive - a real
-# response phrased "This format TESTS whether..." was rejected because the old regex
-# only matched the literal word "test", not "tests".
-_HEDGE_VERB_FORMS = (
-    r"test|tests|tested|testing|measure|measures|measured|measuring|"
-    r"compare|compares|compared|comparing|evaluate|evaluates|evaluated|evaluating|"
-    r"track|tracks|tracked|tracking|assess|assesses|assessed|assessing|"
-    r"determine|determines|determined|determining"
-)
-_WHETHER_HEDGE_RE = re.compile(rf"\b(?:{_HEDGE_VERB_FORMS})\s+whether\b", re.IGNORECASE)
-# Additional framings accepted ONLY in test-design fields (hypothesis, success_metric,
-# variable_to_test, test_name) - these fields inherently describe a proposed test's
-# design/target rather than a claim about what the dataset already showed, so
-# comparative/target language ("compared to baseline", "target: +15%", "than the
-# control group") is itself sufficient framing without also requiring "... whether".
-# "track"/"evaluate" are also included bare (not just "track whether") since rule B's
-# own list of allowed test-design language ("Track...", "Evaluate...") uses them that
-# way, e.g. "Track DM inquiry volume for increase week-over-week during test."
-_TEST_FRAMING_HEDGE_RE = re.compile(
-    r"\btarget(?:s|ed|ing)?\s*:?\b"
-    r"|\bsuccess\s+if\b"
-    r"|\bcompar(?:e|es|ed|ing)\b"
-    r"|\btrack(?:s|ed|ing)?\b"
-    r"|\bevaluat(?:e|es|ed|ing)\b"
-    r"|\brelative\s+to\b"
-    r"|\bversus\b|\bvs\.?\b"
-    r"|\bthan\b"
-    r"|\bweek[\s-]over[\s-]week\b",
     re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
@@ -708,6 +617,7 @@ def _first_real_match(pattern, sentence: str):
         return m
     return None
 
+
 _COMPETITOR_RE = re.compile(r"\bcompetitors?\b", re.IGNORECASE)
 _COMPETITOR_HEDGE_RE = re.compile(
     r"\b(competitor\s+validation(?:\s+is)?\s+required|requires?\s+competitor\s+(?:validation|research)|"
@@ -726,6 +636,9 @@ _BUSINESS_FACT_RE = re.compile(
 _UNIVERSAL_LANGUAGE_RE = re.compile(
     r"\b(always|every\s+post|all\s+posts|consistently\s+performs?|guaranteed|people\s+love)\b", re.IGNORECASE
 )
+_HYPOTHESIS_ALLOWED_START_RE = re.compile(
+    r"^(test|measure|compare|evaluate|determine|track|assess)\b", re.IGNORECASE
+)
 
 
 def _sentences(text: str) -> list:
@@ -736,121 +649,132 @@ def _sentences(text: str) -> list:
     return parts or [text]
 
 
-def _whether_hedged(sentence: str, is_test_field: bool) -> bool:
-    """Hedge check for STRONG_CLAIM words (causes/proves/guarantees/primary driver) -
-    always requires an explicit 'whether' framing. In test-design fields, the hedge
-    verb doesn't need to sit immediately next to 'whether': a real response phrased
-    "...generic testimonials) and whether named instructor content generates
-    request-for-specific-instructor inquiries" is a valid compound test description
-    ("Compare A and B, and [determine] whether C") where the governing verb is earlier
-    in the sentence, not adjacent to "whether" - requiring adjacency rejected it. Since
-    is_test_field already guarantees the field's whole role is describing a proposed,
-    not-yet-run test, a bare "whether" anywhere in the sentence is still overwhelmingly
-    a hypothesis marker there, not a laundering device. Strict (non-test) fields keep
-    the stricter adjacent-verb requirement - this bare-whether allowance never applies
-    to rationale/evidence/theme/evidence_basis, so observational-field protection is
-    unchanged."""
-    if _WHETHER_HEDGE_RE.search(sentence):
-        return True
-    if is_test_field and _BARE_WHETHER_RE.search(sentence):
-        return True
-    return False
-
-
-def _trend_hedged(sentence: str, is_test_field: bool) -> bool:
-    """Hedge check for TREND_PRESENT words (increase/drive/generate/...) - the same
-    'whether' rule as _whether_hedged, plus, in test-design fields only, the wider
-    comparative/target framing in _TEST_FRAMING_HEDGE_RE (a success_metric describing a
-    target threshold, e.g. "15% increase compared to baseline", is not phrased with
-    "whether" at all)."""
-    if _whether_hedged(sentence, is_test_field):
-        return True
-    if is_test_field and _TEST_FRAMING_HEDGE_RE.search(sentence):
-        return True
-    return False
-
-
-def _causal_language_match(text: str, is_test_field: bool = False):
-    """Return (matched_phrase, sentence) for the first unsupported causal-language use
-    in text, or None if there isn't one. See the tier comment above _TREND_PRESENT_RE."""
+def _causal_language_match(text: str):
+    """Unconditional causal-language check for STRICT evidentiary fields (observation/
+    interpretation/evidence_basis). These fields never propose a test - that's what
+    the separate, structurally-validated "hypothesis" field is for - so there is no
+    hedge/framing that makes a causal claim acceptable here: any trend or strong-claim
+    word is a violation, in any tense, except a compound adjective ("scarcity-driven")
+    or a post's own observed-metric description ("generating 3,266 likes"), neither of
+    which is a causal claim to begin with."""
     for sentence in _sentences(text):
         m = _first_real_match(_TREND_PAST_RE, sentence)
         if m:
             return m.group(0), sentence
-
         m = _first_real_match(_TREND_PRESENT_RE, sentence)
-        if m and not _trend_hedged(sentence, is_test_field):
+        if m:
             return m.group(0), sentence
-
         m = _STRONG_CLAIM_RE.search(sentence)
-        if m and not _whether_hedged(sentence, is_test_field):
+        if m:
             return m.group(0), sentence
     return None
 
 
-_EVIDENCE_GROUPS = [
-    ("content_opportunities", "opportunity"),
-    ("strategy_themes", "theme"),
-    ("recommended_formats", "format"),
-]
+def _hypothesis_violation(text: str) -> str:
+    """Return a violation reason, or "" if the hypothesis is structurally valid. Valid
+    means (a) it starts with an explicit test/measurement verb - this required shape,
+    not a causal-language regex, is what proves it's a proposed test and not a stated
+    fact - and (b) it contains no past-tense claim of an already-observed result (a
+    proposed test's hypothesis describes a FUTURE measurement, so a past-tense verb
+    there is still an unsupported claim that it already happened)."""
+    stripped = (text or "").strip()
+    if not _HYPOTHESIS_ALLOWED_START_RE.match(stripped):
+        return (
+            "must start with an explicit test verb (Test/Measure/Compare/Evaluate/"
+            f"Determine/Track/Assess) to prove it is a proposed test, not a stated fact: {text!r}"
+        )
+    for sentence in _sentences(text):
+        m = _first_real_match(_TREND_PAST_RE, sentence)
+        if m:
+            return f"uses a past-tense claim ({m.group(0)!r}) of an already-observed result: {sentence!r}"
+    return ""
 
-# Every free-text field per group, used both to scan for unsafe language (field-aware,
-# not a hardcoded list of array indexes) and to build combined_text for the soft
-# business-fact/competitor-mention checks below.
-_CONTENT_OPPORTUNITIES_TEXT_FIELDS = (
-    "opportunity", "rationale", "evidence", "recommended_format",
-    "target_audience", "content_angle", "suggested_hook", "core_message", "suggested_cta",
+
+_EVIDENCE_GROUPS = ("content_opportunities", "strategy_themes", "recommended_formats")
+
+# Field-role tables per group - see the module-level comment above for what each role
+# means. Used both to scan for unsafe language (field-aware, not a hardcoded list of
+# array indexes) and to build combined_text for the soft business-fact/competitor
+# checks below.
+_CONTENT_OPPORTUNITIES_STRICT_FIELDS = ("observation", "interpretation")
+_CONTENT_OPPORTUNITIES_HYPOTHESIS_FIELDS = ("hypothesis",)
+_CONTENT_OPPORTUNITIES_CREATIVE_FIELDS = (
+    "opportunity", "pattern", "recommended_format", "target_audience", "suggested_cta",
 )
-_STRATEGY_THEMES_TEXT_FIELDS = ("theme", "evidence")
-_RECOMMENDED_FORMATS_TEXT_FIELDS = ("format", "rationale")
-# test_name/hypothesis/variable_to_test/success_metric describe the proposed test
-# itself (is_test_field=True - see _causal_language_match) - format/audience/
-# suggested_duration/evidence_basis stay strict; evidence_basis in particular must
-# justify the test using only already-observed evidence, not a comparative target.
-_RECOMMENDED_TESTS_LENIENT_FIELDS = ("test_name", "hypothesis", "variable_to_test", "success_metric")
-_RECOMMENDED_TESTS_STRICT_FIELDS = ("format", "audience", "suggested_duration", "evidence_basis")
-_RECOMMENDED_TESTS_TEXT_FIELDS = _RECOMMENDED_TESTS_LENIENT_FIELDS + _RECOMMENDED_TESTS_STRICT_FIELDS
+_CONTENT_OPPORTUNITIES_ALL_FIELDS = (
+    _CONTENT_OPPORTUNITIES_CREATIVE_FIELDS
+    + _CONTENT_OPPORTUNITIES_STRICT_FIELDS
+    + _CONTENT_OPPORTUNITIES_HYPOTHESIS_FIELDS
+)
+
+_STRATEGY_THEMES_STRICT_FIELDS = ("observation", "interpretation")
+_STRATEGY_THEMES_CREATIVE_FIELDS = ("theme",)
+_STRATEGY_THEMES_ALL_FIELDS = _STRATEGY_THEMES_CREATIVE_FIELDS + _STRATEGY_THEMES_STRICT_FIELDS
+
+_RECOMMENDED_FORMATS_STRICT_FIELDS = ("observation", "interpretation")
+_RECOMMENDED_FORMATS_CREATIVE_FIELDS = ("format",)
+_RECOMMENDED_FORMATS_ALL_FIELDS = _RECOMMENDED_FORMATS_CREATIVE_FIELDS + _RECOMMENDED_FORMATS_STRICT_FIELDS
+
+_RECOMMENDED_TESTS_STRICT_FIELDS = ("evidence_basis",)
+_RECOMMENDED_TESTS_HYPOTHESIS_FIELDS = ("hypothesis",)
+_RECOMMENDED_TESTS_CREATIVE_FIELDS = (
+    "test_name", "variable_to_test", "format", "audience", "metric", "target", "comparison", "suggested_duration",
+)
+_RECOMMENDED_TESTS_ALL_FIELDS = (
+    _RECOMMENDED_TESTS_CREATIVE_FIELDS + _RECOMMENDED_TESTS_STRICT_FIELDS + _RECOMMENDED_TESTS_HYPOTHESIS_FIELDS
+)
+
 _GROUP_TEXT_FIELDS = {
-    "content_opportunities": _CONTENT_OPPORTUNITIES_TEXT_FIELDS,
-    "strategy_themes": _STRATEGY_THEMES_TEXT_FIELDS,
-    "recommended_formats": _RECOMMENDED_FORMATS_TEXT_FIELDS,
+    "content_opportunities": _CONTENT_OPPORTUNITIES_ALL_FIELDS,
+    "strategy_themes": _STRATEGY_THEMES_ALL_FIELDS,
+    "recommended_formats": _RECOMMENDED_FORMATS_ALL_FIELDS,
 }
 
 
 def _iter_text_fields(data: dict):
-    """Yield (location, text, is_test_field, item) for every free-text string field in
-    a response - every claim-bearing field across every item, not a hardcoded list of
-    specific indexes. is_test_field marks fields whose entire purpose is describing a
-    not-yet-run test (see _causal_language_match). item is the owning dict (for the
-    competitor-claim requires_verification check below), or None for executive_summary/
+    """Yield (location, text, role, item) for every free-text string field in a
+    response - every claim-bearing field across every item, not a hardcoded list of
+    specific indexes. role is "strict"/"hypothesis"/"creative" (see the module-level
+    comment above _TREND_PRESENT_RE). item is the owning dict (for the competitor-
+    claim requires_verification escape valve), or None for executive_summary/
     action_plan, which aren't part of an item and so can't carry that flag."""
-    yield "executive_summary", data.get("executive_summary", ""), False, None
+    yield "executive_summary", data.get("executive_summary", ""), "strict", None
 
     for i, item in enumerate(data.get("content_opportunities", [])):
-        for field in _CONTENT_OPPORTUNITIES_TEXT_FIELDS:
-            yield f"content_opportunities[{i}].{field}", item.get(field, ""), False, item
+        for field in _CONTENT_OPPORTUNITIES_CREATIVE_FIELDS:
+            yield f"content_opportunities[{i}].{field}", item.get(field, ""), "creative", item
+        for field in _CONTENT_OPPORTUNITIES_STRICT_FIELDS:
+            yield f"content_opportunities[{i}].{field}", item.get(field, ""), "strict", item
+        for field in _CONTENT_OPPORTUNITIES_HYPOTHESIS_FIELDS:
+            yield f"content_opportunities[{i}].{field}", item.get(field, ""), "hypothesis", item
     for i, item in enumerate(data.get("strategy_themes", [])):
-        for field in _STRATEGY_THEMES_TEXT_FIELDS:
-            yield f"strategy_themes[{i}].{field}", item.get(field, ""), False, item
+        for field in _STRATEGY_THEMES_CREATIVE_FIELDS:
+            yield f"strategy_themes[{i}].{field}", item.get(field, ""), "creative", item
+        for field in _STRATEGY_THEMES_STRICT_FIELDS:
+            yield f"strategy_themes[{i}].{field}", item.get(field, ""), "strict", item
     for i, item in enumerate(data.get("recommended_formats", [])):
-        for field in _RECOMMENDED_FORMATS_TEXT_FIELDS:
-            yield f"recommended_formats[{i}].{field}", item.get(field, ""), False, item
+        for field in _RECOMMENDED_FORMATS_CREATIVE_FIELDS:
+            yield f"recommended_formats[{i}].{field}", item.get(field, ""), "creative", item
+        for field in _RECOMMENDED_FORMATS_STRICT_FIELDS:
+            yield f"recommended_formats[{i}].{field}", item.get(field, ""), "strict", item
     for i, item in enumerate(data.get("recommended_tests", [])):
-        for field in _RECOMMENDED_TESTS_LENIENT_FIELDS:
-            yield f"recommended_tests[{i}].{field}", item.get(field, ""), True, item
+        for field in _RECOMMENDED_TESTS_CREATIVE_FIELDS:
+            yield f"recommended_tests[{i}].{field}", item.get(field, ""), "creative", item
         for field in _RECOMMENDED_TESTS_STRICT_FIELDS:
-            yield f"recommended_tests[{i}].{field}", item.get(field, ""), False, item
+            yield f"recommended_tests[{i}].{field}", item.get(field, ""), "strict", item
+        for field in _RECOMMENDED_TESTS_HYPOTHESIS_FIELDS:
+            yield f"recommended_tests[{i}].{field}", item.get(field, ""), "hypothesis", item
     for i, text in enumerate(data.get("action_plan", [])):
-        yield f"action_plan[{i}]", text, False, None
+        yield f"action_plan[{i}]", text, "creative", None
 
 
 def _competitor_claim_is_verified(item) -> bool:
     """True when the item has explicitly flagged its competitor mention for human
     verification (requires_verification=true with a real explanation) - the "auto-set
     requires_verification=true with a clear verification_reason" alternative to
-    rewriting, called out explicitly for this hardening pass. executive_summary/
-    action_plan have no item to carry this flag, so they can never use this escape
-    valve - a competitor mention there must be hedged in the text itself."""
+    rewriting. executive_summary/action_plan have no item to carry this flag, so they
+    can never use this escape valve - a competitor mention there must be hedged in the
+    text itself."""
     if not isinstance(item, dict):
         return False
     return bool(item.get("requires_verification")) and bool(str(item.get("verification_reason") or "").strip())
@@ -862,16 +786,23 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
     hard = []
     soft = []
 
-    for location, text, is_test_field, item in _iter_text_fields(data):
+    for location, text, role, item in _iter_text_fields(data):
         if not isinstance(text, str):
             continue
-        causal = _causal_language_match(text, is_test_field=is_test_field)
-        if causal:
-            phrase, sentence = causal
-            hard.append(
-                f"{location}: uses unsupported causal language ({phrase!r}) - state "
-                f"association or a testable hypothesis instead of causation: {sentence!r}"
-            )
+
+        if role == "strict":
+            causal = _causal_language_match(text)
+            if causal:
+                phrase, sentence = causal
+                hard.append(
+                    f"{location}: uses unsupported causal language ({phrase!r}) - state "
+                    f"only what was observed, or move this into 'hypothesis': {sentence!r}"
+                )
+        elif role == "hypothesis":
+            violation = _hypothesis_violation(text)
+            if violation:
+                hard.append(f"{location}: {violation}")
+
         if (
             _COMPETITOR_RE.search(text)
             and not _COMPETITOR_HEDGE_RE.search(text)
@@ -888,7 +819,7 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
                 f"planning language: {text!r}"
             )
 
-    for group_name, label_field in _EVIDENCE_GROUPS:
+    for group_name in _EVIDENCE_GROUPS:
         for i, item in enumerate(data.get(group_name, [])):
             if not isinstance(item, dict):
                 continue
@@ -912,8 +843,7 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
             sample_size = item.get("sample_size")
             requires_verification = bool(item.get("requires_verification", False))
             combined_text = " ".join(
-                str(item.get(f, "")) for f in _GROUP_TEXT_FIELDS.get(group_name, (label_field, "evidence", "rationale"))
-                if item.get(f)
+                str(item.get(f, "")) for f in _GROUP_TEXT_FIELDS[group_name] if item.get(f)
             )
 
             if sample_size and sample_size <= 2 and confidence == "high":
@@ -974,7 +904,7 @@ def find_evidence_violations(data: dict, valid_post_ids: set) -> dict:
             hard.append(f"{loc}: confidence must be one of {sorted(ALLOWED_CONFIDENCE_LEVELS)}, got {test_confidence!r}")
 
         requires_verification = bool(item.get("requires_verification", False))
-        combined_text = " ".join(str(item.get(f, "")) for f in _RECOMMENDED_TESTS_TEXT_FIELDS if item.get(f))
+        combined_text = " ".join(str(item.get(f, "")) for f in _RECOMMENDED_TESTS_ALL_FIELDS if item.get(f))
         if not requires_verification and _BUSINESS_FACT_RE.search(combined_text):
             soft.append(
                 {
@@ -1004,7 +934,7 @@ def apply_auto_corrections(data: dict, violations: dict) -> int:
     for v in violations["soft"]:
         soft_by_loc.setdefault(v["loc"], []).append(v)
 
-    for group_name, _ in _EVIDENCE_GROUPS:
+    for group_name in _EVIDENCE_GROUPS:
         for i, item in enumerate(data.get(group_name, [])):
             loc = f"{group_name}[{i}]"
             for v in soft_by_loc.get(loc, []):
