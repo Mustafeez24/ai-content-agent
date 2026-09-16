@@ -136,18 +136,39 @@ OUTPUT IS STRUCTURED, NOT PROSE. Every field has a narrow job. Keep every string
 - one sentence or a short phrase, never a paragraph. Do not repeat the same point \
 across multiple fields.
 
+EXECUTIVE_SUMMARY, "observation", "interpretation", and recommended_tests' \
+"evidence_basis" are ALL OBSERVATIONAL FIELDS - they may state ONLY what the dataset \
+actually shows, using words like: is associated with, co-occurs with, was observed \
+in, achieved, received, recorded, shows, features, contains, was used in, had, was \
+associated with. This includes a post's own derived numbers (ratios, rates, \
+percentages) - a comment ratio or engagement rate is just another number Stage 4.1 \
+already gave you, so cite it with "recorded"/"had"/"achieved", never "generated"/
+"drove". NEVER use, in these fields, in any tense and never softened with "may" or \
+"likely": drives, drive, drove, driven, generates, generated, increases, increased, \
+leads to, led to, results in, resulted in, "primary driver", "engagement driver", \
+proven, guarantees. If you cannot state something using only these observational \
+words, it does not belong in an observational field - put it in "hypothesis" instead.
+  Bad (executive_summary): "...educational course breakdowns also drive strong engagement."
+  Good (executive_summary): "...educational course breakdowns were among the posts \
+  with strong observed engagement."
+  Bad (observation): "...used countdown messaging and generated a notably high \
+  comment ratio (5.5% engagement rate)."
+  Good (observation): "...used countdown messaging and recorded 366 likes, 20 \
+  comments, and a 5.5% engagement rate."
+  Bad (evidence_basis / recommended_formats.observation): "Emotional reaction and \
+  instructor praise drove exceptional performance." / "...personal connection drive \
+  exceptional engagement."
+  Good: "DWyk4T6E5OF featured an emotional reaction and explicit instructor praise \
+  and received 3,266 likes and 49 comments, compared with the account average."
+
 EVIDENCE FIELDS (content_opportunities, strategy_themes, recommended_formats):
 - "observation": ONE short factual sentence citing a specific post_id and its actual \
 number(s) from the data you were given, e.g. "DH3VdAmCS5g had 1,119 likes." State the \
 number and stop - never interpret, never explain why, never use a verb like drives/ \
 generates/increases/causes here.
-- "interpretation": ONE short sentence using association language only - "is \
-associated with", "appears alongside", "performed strongly in this sample", "was \
-observed in". NEVER use drives, driving, drove, driven, causes, proves, guarantees, \
-results in, leads to, increases, decreases, converts, generates, or "driver"/"drivers" \
-as a noun (not "primary driver", not "engagement driver") - in any tense, not softened \
-with "may" or "likely" either. If you cannot state something as a plain association, \
-put it in "hypothesis" instead.
+- "interpretation": ONE short sentence using association language only (see the \
+OBSERVATIONAL FIELDS rules above). If you cannot state something as a plain \
+association, put it in "hypothesis" instead.
 
 content_opportunities also has:
 - "pattern": a short label for what was observed (e.g. "time-limited discount CTA", \
@@ -161,9 +182,15 @@ must start with one of these exact words: Test, Measure, Compare, Evaluate, Dete
 Track, Assess (e.g. "Test whether...", "Compare A against B and measure whether..."). \
 That required opening is what proves the sentence is a proposed test rather than a \
 stated fact, so once it's there you do not need to hedge every verb inside the \
-sentence too. Never phrase it in the past tense (never "increased"/"drove"/ \
-"generated" describing a result - those claim something already happened, which this \
-dataset does not establish for a test that hasn't run).
+sentence too. Never phrase a past-tense word as the sentence's main claim (never "DM \
+inquiries increased" / "this drove engagement" / "engagement was generated" - those \
+assert something already happened, which this dataset does not establish for a test \
+that hasn't run). A past-tense word used adjectivally to name a target state right \
+after "with"/"of"/"for"/"about"/"versus"/"compared to" is fine, since it describes \
+what you're testing FOR, not a claim it already occurred - "...and correlate with \
+increased DM inquiries about certifications..." is a valid target description. \
+"Track increased DM inquiries" is NOT fine - phrase it as "Track DM inquiries" or \
+"Track whether DM inquiries increase" instead.
 
 RECOMMENDED_TESTS also replaces one long "success metric" paragraph with three short \
 structural fields instead of a sentence:
@@ -639,6 +666,38 @@ _UNIVERSAL_LANGUAGE_RE = re.compile(
 _HYPOTHESIS_ALLOWED_START_RE = re.compile(
     r"^(test|measure|compare|evaluate|determine|track|assess)\b", re.IGNORECASE
 )
+# A past-tense trend word immediately preceded by a preposition/comparative
+# (with/of/for/about/versus/than/compared to) can only be functioning as an adjective
+# describing a FUTURE TARGET state ("correlate WITH increased DM inquiries" = a target
+# to test for), never as the main verb of a completed-action claim - a preposition
+# can never be followed by a finite verb in English, only by a noun phrase. This is
+# deliberately narrow: a bare verb immediately before the word ("track increased
+# inquiries") is NOT exempted, since that phrasing is genuinely ambiguous and still
+# reads as asserting the increase already happened unless reframed with "whether" or
+# a preposition. Scoped to the hypothesis field only - observation/interpretation/
+# evidence_basis never get this exemption, per _causal_language_match above.
+_HYPOTHESIS_TARGET_PRECEDING_RE = re.compile(
+    r"\b(with|of|for|about|versus|vs\.?|than|compared(?:\s+(?:to|with))?|relative\s+to)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_hypothesis_target_descriptor(sentence: str, start: int) -> bool:
+    return bool(_HYPOTHESIS_TARGET_PRECEDING_RE.search(sentence[:start]))
+
+
+def _first_hypothesis_past_tense_match(sentence: str):
+    """Like _first_real_match(_TREND_PAST_RE, ...), plus the target-descriptor
+    exemption above, which applies only to the hypothesis field."""
+    for m in _TREND_PAST_RE.finditer(sentence):
+        if _is_compound_adjective(sentence, m.start()):
+            continue
+        if _is_metric_description(sentence, m.start(), m.end()):
+            continue
+        if _is_hypothesis_target_descriptor(sentence, m.start()):
+            continue
+        return m
+    return None
 
 
 def _sentences(text: str) -> list:
@@ -684,7 +743,7 @@ def _hypothesis_violation(text: str) -> str:
             f"Determine/Track/Assess) to prove it is a proposed test, not a stated fact: {text!r}"
         )
     for sentence in _sentences(text):
-        m = _first_real_match(_TREND_PAST_RE, sentence)
+        m = _first_hypothesis_past_tense_match(sentence)
         if m:
             return f"uses a past-tense claim ({m.group(0)!r}) of an already-observed result: {sentence!r}"
     return ""

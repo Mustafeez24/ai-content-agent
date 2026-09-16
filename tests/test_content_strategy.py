@@ -700,6 +700,126 @@ class TestLatestRealRunFailureRegression(unittest.TestCase):
         self.assertEqual(violations["hard"], [])
 
 
+# --- Regression tests for the exact 5 real-run failures reported after the
+# structured-field redesign (commit f52f85d). All 5 were the validator working
+# correctly (4 were genuine unsupported causal claims Claude kept generating in
+# observational fields) except one real bug: the hypothesis field's past-tense check
+# flagged "increased" when used adjectivally as a target descriptor ("correlate with
+# increased DM inquiries") the same way it flags a genuine completed-action assertion
+# ("DM inquiries increased") - see _is_hypothesis_target_descriptor.
+class TestThirdRealRunFailureRegression(unittest.TestCase):
+    def test_1_executive_summary_drive_is_violation(self):
+        resp = make_strategy_response(
+            executive_summary=(
+                "Promotional carousel posts with discount urgency (DH3VdAmCS5g, 1,119 likes) and "
+                "educational course breakdowns (DIgZ3GuC0mo, 1,112 likes; DHvnI6ViEAb, 1,158 likes) "
+                "also drive strong engagement."
+            )
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() and "executive_summary" in v for v in violations["hard"]))
+
+    def test_2_evidence_basis_personal_connection_drive_is_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["evidence_basis"] = (
+            "DWyk4T6E5OF testimonial with explicit instructor praise achieved 3,266 likes (49 comments, "
+            "10x account average comment rate), indicating instructor credibility and personal "
+            "connection drive exceptional engagement."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_3_observation_generated_comment_ratio_is_violation(self):
+        resp = make_strategy_response(
+            opportunity_overrides={
+                "observation": (
+                    "DYGc47zo4Tr (366 likes, 20 comments) used countdown messaging for seasonal "
+                    "reopening and generated notably high comment ratio (5.5% engagement rate)."
+                )
+            }
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_4_recommended_formats_observation_drove_is_violation(self):
+        resp = make_strategy_response()
+        resp["recommended_formats"][0]["observation"] = "Emotional reaction and instructor praise drove exceptional performance."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_5_hypothesis_correlate_with_increased_dm_inquiries_allowed(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = (
+            "Test whether 2-4 educational reels addressing PADI/SSI certification standards, safety "
+            "protocols, and 'How to Identify Unqualified Operators' generate 800+ likes, 25+ comments "
+            "(indicating reassurance-seeking engagement), and correlate with increased DM inquiries "
+            "about certifications and booking form submissions from safety-focused prospects."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+
+# --- Additional coverage required for this hardening pass ---
+class TestObservationalVsHypothesisWordChoice(unittest.TestCase):
+    def test_observational_fields_reject_drive_driven_drove_generated_increased(self):
+        for word, text in [
+            ("drive", "This format continues to drive strong engagement."),
+            ("driven", "Engagement here was driven by instructor praise."),
+            ("drove", "Instructor praise drove exceptional performance."),
+            ("generated", "This post generated a strong comment ratio."),
+            ("increased", "Comment volume increased after this post."),
+        ]:
+            with self.subTest(word=word):
+                resp = make_strategy_response(opportunity_overrides={"interpretation": text})
+                violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+                self.assertTrue(
+                    any("causal" in v.lower() for v in violations["hard"]),
+                    f"expected {word!r} to be rejected in an observational field: {text!r}",
+                )
+
+    def test_observed_metric_received_likes_passes(self):
+        resp = make_strategy_response(opportunity_overrides={"observation": "POST_TOP1 received 3,266 likes and 49 comments."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_compound_adjective_narrative_driven_passes(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"interpretation": "Narrative-driven reels are associated with strong engagement in this sample."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_hypothesis_can_use_future_test_framing(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = (
+            "Measure whether testimonial reels achieve higher engagement than educational reels over the next 4 weeks."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_hypothesis_cannot_claim_past_observed_outcome(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "Test whether testimonial reels performed better after engagement increased last month."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("past-tense" in v for v in violations["hard"]))
+
+    def test_track_dm_inquiries_passes(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "Track DM inquiries during the test period."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_track_increased_dm_inquiries_rejected_as_already_observed_increase(self):
+        # Contrast with test_5 above: "with increased DM inquiries" (preposition
+        # before the participle) names a future target; "Track increased DM
+        # inquiries" (bare verb before the participle) reads as asserting the
+        # increase already happened, and stays rejected.
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = "Track increased DM inquiries during the test period."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("past-tense" in v for v in violations["hard"]))
+
+
 # --- error message extraction (Step 2 fix: real Anthropic error, never a bare status) ---
 class TestApiErrorMessageExtraction(unittest.TestCase):
     def test_extracts_message_from_body_error_dict(self):
