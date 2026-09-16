@@ -820,6 +820,192 @@ class TestObservationalVsHypothesisWordChoice(unittest.TestCase):
         self.assertTrue(any("past-tense" in v for v in violations["hard"]))
 
 
+# --- Regression tests for the exact 8 real-run failures reported after commit
+# 85c3c5f. All 8 were the validator correctly rejecting genuine unsupported causal/
+# competitor claims Claude kept generating in observational fields - confirmed by
+# hand-checking each one against find_evidence_violations before writing these tests.
+# The one code change this round was closing a real gap in _STRONG_CLAIM_RE: "primary
+# X driver" only recognized "engagement" as the intervening word, so a variant like
+# "primary top-post driver" (failure #6) would have slipped through if that exact
+# sentence hadn't also contained a second, already-covered "primary engagement
+# driver" phrase earlier in it. The fix and the rest of this hardening pass are prompt
+# tightening (a RAW DATA -> OBSERVATION -> INTERPRETATION -> HYPOTHESIS ->
+# RECOMMENDATION -> TEST pipeline framing with a worked example, plus BAD/GOOD pairs
+# matching each failure verbatim) so Claude generates fewer of these on the first
+# attempt - it does not change what the validator accepts or rejects.
+class TestFourthRealRunFailureRegression(unittest.TestCase):
+    def test_1_observation_proves_transformation_narratives_drive_engagement(self):
+        resp = make_strategy_response(
+            opportunity_overrides={
+                "observation": (
+                    "Report identifies absence of dedicated 'Non-Swimmer to Diver' transformation content "
+                    "despite strong evidence this resonates; DWyk4T6E5OF's emotional resonance proves "
+                    "transformation narratives drive engagement."
+                )
+            }
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_2_observation_educational_format_has_proven_engagement_value(self):
+        resp = make_strategy_response(
+            opportunity_overrides={
+                "observation": (
+                    "Report identifies marine life discovery as documented strong theme and dive site content "
+                    "as completely absent; educational format has proven engagement value across DIgZ3GuC0mo "
+                    "(1,112 likes) and DHvnI6ViEAb (1,158 likes)."
+                )
+            }
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_3_strategy_themes_observation_primary_engagement_driver(self):
+        resp = make_strategy_response()
+        resp["strategy_themes"][0]["observation"] = (
+            "DWyk4T6E5OF recorded 3,266 likes with explicit instructor praise as primary engagement driver; "
+            "report notes instructor quality is discussed implicitly in top posts but no dedicated instructor "
+            "profile content exists."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_4_recommended_formats_observation_primary_engagement_driver(self):
+        resp = make_strategy_response()
+        resp["recommended_formats"][0]["observation"] = (
+            "Report identifies explicit instructor praise in DWyk4T6E5OF as primary engagement driver "
+            "(3,266 likes, 49 comments); no existing content dedicates full spotlight to named instructor."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_5_recommended_formats_interpretation_aligns_with_proven_format(self):
+        resp = make_strategy_response()
+        resp["recommended_formats"][0]["interpretation"] = (
+            "Educational video format shows strong engagement; location-specific dive site education is "
+            "absent but aligns with proven educational format performance."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_6_evidence_basis_primary_top_post_driver_variant(self):
+        # This is the exact string that exposed the _STRONG_CLAIM_RE gap - even
+        # isolating just the "primary top-post driver" half (with the earlier
+        # "primary engagement driver" phrase removed) must still be caught.
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["evidence_basis"] = (
+            "Report notes instructor quality emerges as primary top-post driver but no dedicated "
+            "instructor spotlight content exists."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_7_recommended_formats_interpretation_demonstrated_engagement_drivers(self):
+        resp = make_strategy_response()
+        resp["recommended_formats"][0]["interpretation"] = (
+            "Instructor praise in top posts suggests named instructor content would be aligned with "
+            "demonstrated engagement drivers, though dedicated spotlight format is untested."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_8_recommended_tests_audience_competitor_comparison_unverified(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["audience"] = (
+            "Certification-seekers researching 'how to get certified' and course structure; high-intent "
+            "audience reducing booking friction via transparent pathway; students comparing FlyingFish "
+            "structure vs. competitors"
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
+
+
+class TestFieldSemanticContractRequirements(unittest.TestCase):
+    def test_1_observation_rejects_primary_engagement_driver(self):
+        resp = make_strategy_response(opportunity_overrides={"observation": "This is the primary engagement driver."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_2_observation_rejects_proven_engagement_value(self):
+        resp = make_strategy_response(opportunity_overrides={"observation": "This format has proven engagement value."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_3_observation_rejects_transformation_narratives_drive_engagement(self):
+        resp = make_strategy_response(opportunity_overrides={"observation": "Transformation narratives drive engagement."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_4_observation_accepts_recorded_likes_and_comments(self):
+        resp = make_strategy_response(opportunity_overrides={"observation": "DWyk4T6E5OF recorded 3,266 likes and 49 comments."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_5_observation_accepts_includes_explicit_instructor_praise(self):
+        resp = make_strategy_response(opportunity_overrides={"observation": "DWyk4T6E5OF includes explicit instructor praise."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_6_interpretation_accepts_associated_with_strong_observed_engagement(self):
+        resp = make_strategy_response(
+            opportunity_overrides={"interpretation": "These posts are associated with strong observed engagement."}
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_7_interpretation_rejects_these_posts_drive_engagement(self):
+        resp = make_strategy_response(opportunity_overrides={"interpretation": "These posts drive engagement."})
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("causal" in v.lower() for v in violations["hard"]))
+
+    def test_8_hypothesis_accepts_test_whether_named_instructor(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = (
+            "Test whether named instructor content receives higher engagement than generic testimonials."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_9_hypothesis_accepts_measure_whether_educational_reels(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["hypothesis"] = (
+            "Measure whether educational reels perform differently from testimonial reels."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_10_audience_rejects_competitor_comparison_without_verification(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["audience"] = "Students comparing FlyingFish structure vs. competitors."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
+
+    def test_10b_audience_accepts_competitor_comparison_with_verification(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["audience"] = "Students comparing FlyingFish structure vs. competitors."
+        resp["recommended_tests"][0]["requires_verification"] = True
+        resp["recommended_tests"][0]["verification_reason"] = (
+            "Competitor validation required; competitor data is not present in the supplied dataset."
+        )
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_11_audience_accepts_certification_seekers_without_competitors(self):
+        resp = make_strategy_response()
+        resp["recommended_tests"][0]["audience"] = "Certification-seekers researching how to get certified and understand course structure."
+        violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+        self.assertEqual(violations["hard"], [])
+
+    def test_12_compound_adjectives_continue_to_work(self):
+        for word in ("narrative-driven", "urgency-driven", "weather-driven", "scarcity-driven"):
+            with self.subTest(word=word):
+                resp = make_strategy_response(
+                    opportunity_overrides={"interpretation": f"{word.capitalize()} content is associated with strong engagement."}
+                )
+                violations = strat.find_evidence_violations(resp, VALID_POST_IDS)
+                self.assertEqual(violations["hard"], [], f"{word!r} should not be treated as a causal claim")
+
+
 # --- error message extraction (Step 2 fix: real Anthropic error, never a bare status) ---
 class TestApiErrorMessageExtraction(unittest.TestCase):
     def test_extracts_message_from_body_error_dict(self):

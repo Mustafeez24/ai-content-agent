@@ -136,18 +136,45 @@ OUTPUT IS STRUCTURED, NOT PROSE. Every field has a narrow job. Keep every string
 - one sentence or a short phrase, never a paragraph. Do not repeat the same point \
 across multiple fields.
 
+You build every claim through this pipeline - each stage may ONLY do its own job, \
+never the next stage's job:
+
+  RAW DATA -> OBSERVATION -> INTERPRETATION -> HYPOTHESIS -> RECOMMENDATION -> TEST
+
+  RAW DATA (given to you): DWyk4T6E5OF = 3,266 likes, 49 comments, explicit instructor praise.
+  OBSERVATION (bare fact, zero interpretation): "DWyk4T6E5OF recorded 3,266 likes and \
+  49 comments and includes explicit instructor praise."
+  INTERPRETATION (a careful association across observations, NEVER causation): \
+  "Highly engaged testimonial content in the supplied dataset sometimes includes \
+  explicit instructor praise."
+  HYPOTHESIS (a testable future causal question, explicitly marked as untested): \
+  "Test whether named-instructor testimonials receive higher engagement than \
+  comparable testimonials without instructor identification."
+  RECOMMENDATION (an action based on the hypothesis, not a promised result): \
+  "Create a controlled series of named-instructor testimonial posts."
+  TEST (see the metric/target/comparison fields further below).
+
+An OBSERVATION must never smuggle in an INTERPRETATION, and an INTERPRETATION must \
+never smuggle in a HYPOTHESIS. If you catch yourself writing why something happened, \
+what it proves, or what "drives" it inside an observation or interpretation, you have \
+crossed into hypothesis territory - move that sentence into "hypothesis" instead, \
+phrased as a testable future question, or drop it.
+
 EXECUTIVE_SUMMARY, "observation", "interpretation", and recommended_tests' \
 "evidence_basis" are ALL OBSERVATIONAL FIELDS - they may state ONLY what the dataset \
 actually shows, using words like: is associated with, co-occurs with, was observed \
 in, achieved, received, recorded, shows, features, contains, was used in, had, was \
-associated with. This includes a post's own derived numbers (ratios, rates, \
-percentages) - a comment ratio or engagement rate is just another number Stage 4.1 \
-already gave you, so cite it with "recorded"/"had"/"achieved", never "generated"/
-"drove". NEVER use, in these fields, in any tense and never softened with "may" or \
-"likely": drives, drive, drove, driven, generates, generated, increases, increased, \
-leads to, led to, results in, resulted in, "primary driver", "engagement driver", \
-proven, guarantees. If you cannot state something using only these observational \
-words, it does not belong in an observational field - put it in "hypothesis" instead.
+associated with, includes, appears in, is absent from. This includes a post's own \
+derived numbers (ratios, rates, percentages) - a comment ratio or engagement rate is \
+just another number Stage 4.1 already gave you, so cite it with "recorded"/"had"/ \
+"achieved", never "generated"/"drove". NEVER use, in these fields, in any tense and \
+never softened with "may", "likely", "emerges as", or "aligns with": drives, drive, \
+drove, driven, generates, generated, increases, increased, leads to, led to, results \
+in, resulted in, "primary driver"/"top driver"/"main driver" (with or without a word \
+in between, e.g. "primary engagement driver", "primary top-post driver" are BOTH \
+banned), "engagement driver(s)", proven, guarantees, "has proven engagement value". \
+If you cannot state something using only these observational words, it does not \
+belong in an observational field - put it in "hypothesis" instead.
   Bad (executive_summary): "...educational course breakdowns also drive strong engagement."
   Good (executive_summary): "...educational course breakdowns were among the posts \
   with strong observed engagement."
@@ -155,11 +182,24 @@ words, it does not belong in an observational field - put it in "hypothesis" ins
   comment ratio (5.5% engagement rate)."
   Good (observation): "...used countdown messaging and recorded 366 likes, 20 \
   comments, and a 5.5% engagement rate."
-  Bad (evidence_basis / recommended_formats.observation): "Emotional reaction and \
-  instructor praise drove exceptional performance." / "...personal connection drive \
-  exceptional engagement."
-  Good: "DWyk4T6E5OF featured an emotional reaction and explicit instructor praise \
-  and received 3,266 likes and 49 comments, compared with the account average."
+  Bad (observation): "...emotional resonance proves transformation narratives drive \
+  engagement." / "...educational format has proven engagement value across [posts]."
+  Good (observation): "DWyk4T6E5OF used an emotional transformation narrative and \
+  recorded 3,266 likes and 49 comments." / "Two educational course posts in the \
+  supplied dataset recorded 1,112 and 1,158 likes."
+  Bad (observation/evidence_basis/interpretation): "...explicit instructor praise as \
+  primary engagement driver..." / "...instructor quality emerges as primary top-post \
+  driver..." / "...aligned with demonstrated engagement drivers..."
+  Good: "DWyk4T6E5OF included explicit instructor praise and recorded 3,266 likes and \
+  49 comments." (the causal claim - that praise IS a "driver" of anything - belongs \
+  only in a hypothesis: "Test whether named-instructor content receives higher \
+  engagement than comparable testimonials without instructor identification.")
+  Bad (interpretation): "Educational video format shows strong engagement; \
+  location-specific dive site education is absent but aligns with proven educational \
+  format performance."
+  Good (interpretation): "Educational course explanations are represented among \
+  posts with high observed like counts. Location-specific dive-site educational \
+  content is absent from the supplied dataset, so its performance remains untested."
 
 EVIDENCE FIELDS (content_opportunities, strategy_themes, recommended_formats):
 - "observation": ONE short factual sentence citing a specific post_id and its actual \
@@ -222,7 +262,15 @@ differentiation is worth raising, phrase it as "Potential differentiation; compe
 validation required." or "Requires competitor research before making a comparative \
 claim." and set requires_verification=true with a verification_reason explaining that \
 competitor data is needed. An unhedged competitor mention with requires_verification \
-left false is always rejected, in every field including target_audience and action_plan.
+left false is always rejected, in every field including target_audience/audience and \
+action_plan - including a casual aside inside a longer sentence about something else.
+  Bad (recommended_tests.audience): "Certification-seekers researching how to get \
+  certified and course structure; high-intent audience reducing booking friction via \
+  transparent pathway; students comparing FlyingFish structure vs. competitors."
+  Good (recommended_tests.audience): "Certification-seekers researching how to get \
+  certified and understand course structure; first-time students seeking transparent \
+  information about the training pathway." (no competitor reference needed - describe \
+  FlyingFish's own audience, not a comparison)
 
 BUSINESS OUTCOME CLAIMS - the dataset contains Instagram engagement observations only. \
 It does NOT establish bookings, booking conversions, revenue, leads, customer \
@@ -597,7 +645,11 @@ _STRONG_CLAIM_RE = re.compile(
     r"\b(causes?|causing|caused)\b"
     r"|\b(proves?|proving|proved|proven)\b"
     r"|\b(guarantees?|guaranteeing|guaranteed)\b"
-    r"|\bprimary\s+(?:engagement\s+)?drivers?\b"
+    # "primary driver"/"primary engagement driver" AND variants like "primary
+    # top-post driver" - up to two hyphen/space-joined modifier words between
+    # "primary"/"top"/"main"/"key"/"leading"/"biggest" and "driver(s)", not just the
+    # single word "engagement".
+    r"|\b(?:primary|top|main|key|leading|biggest)\s+(?:[a-z]+[-\s]+){0,2}drivers?\b"
     r"|\bengagement\s+drivers?\b",
     re.IGNORECASE,
 )
