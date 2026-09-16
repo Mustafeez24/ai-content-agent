@@ -282,6 +282,29 @@ class TruncatedResponseError(Exception):
     """Raised when Claude's response was cut off by the token limit before completing."""
 
 
+_CREDENTIAL_LIKE_RE = re.compile(r"sk-ant-[A-Za-z0-9\-_]+")
+
+
+def extract_api_error_message(e) -> str:
+    """Best-effort extraction of the real Anthropic error message (e.g. the
+    invalid_request_error detail for a 400) so failures are diagnosable instead of a
+    bare status code. Anthropic's error responses never echo the API key/auth header -
+    the redaction below is defense-in-depth, not a response to an observed leak."""
+    message = None
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            message = err.get("message")
+        elif isinstance(err, str):
+            message = err
+    if not message:
+        message = getattr(e, "message", None)
+    if not message:
+        message = str(e)
+    return _CREDENTIAL_LIKE_RE.sub("[REDACTED]", str(message))
+
+
 def call_claude(api_key: str, payload: dict, max_tokens: int = BASE_MAX_TOKENS, extra_note: str = None) -> tuple:
     import anthropic
 
@@ -620,7 +643,7 @@ def main() -> int:
             return "Rate limited. Try again in a moment."
         if isinstance(e, anthropic.APIConnectionError):
             return "Network error - could not reach the Anthropic API."
-        return f"API error (status {e.status_code})."
+        return f"API error (status {e.status_code}): {extract_api_error_message(e)}"
 
     claude_result = None
     response = None

@@ -332,6 +332,37 @@ class TestBusinessFactClaims(unittest.TestCase):
         self.assertTrue(any("competitor" in v.lower() for v in violations["hard"]))
 
 
+# --- error message extraction (Step 2 fix: real Anthropic error, never a bare status) ---
+class TestApiErrorMessageExtraction(unittest.TestCase):
+    def test_extracts_message_from_body_error_dict(self):
+        e = MagicMock()
+        e.body = {"error": {"type": "invalid_request_error", "message": "schema is invalid: bad enum"}}
+        e.message = None
+        self.assertEqual(strat.extract_api_error_message(e), "schema is invalid: bad enum")
+
+    def test_falls_back_to_message_attribute(self):
+        e = MagicMock()
+        e.body = None
+        e.message = "some SDK-level message"
+        self.assertEqual(strat.extract_api_error_message(e), "some SDK-level message")
+
+    def test_falls_back_to_str_when_nothing_else_available(self):
+        class Fake(Exception):
+            body = None
+            message = None
+
+        e = Fake("plain fallback text")
+        self.assertEqual(strat.extract_api_error_message(e), "plain fallback text")
+
+    def test_redacts_credential_like_strings(self):
+        e = MagicMock()
+        e.body = {"error": {"message": "bad key sk-ant-abc123XYZ_-9 was used"}}
+        e.message = None
+        result = strat.extract_api_error_message(e)
+        self.assertNotIn("sk-ant-abc123XYZ_-9", result)
+        self.assertIn("[REDACTED]", result)
+
+
 def make_completed_stream(stop_reason, payload_dict):
     resp = MagicMock()
     resp.stop_reason = stop_reason
@@ -457,6 +488,42 @@ class TestSoftViolationAutoCorrection(MainEndToEndMixin, unittest.TestCase):
         with open(self.output_path) as f:
             output = json.load(f)
         self.assertTrue(output["content_opportunities"][0]["requires_verification"])
+
+
+# --- end-to-end: a real 400 surfaces its actual server message, not a bare status code ---
+class TestApiErrorSurfacesRealMessage(MainEndToEndMixin, unittest.TestCase):
+    def test_400_with_body_message_is_printed(self):
+        import httpx2
+        import anthropic
+
+        response = httpx2.Response(400, request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"))
+        error = anthropic.APIStatusError(
+            "bad request",
+            response=response,
+            body={"error": {"type": "invalid_request_error", "message": "schema validation failed: unexpected token"}},
+        )
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = error
+
+        with patch("anthropic.Anthropic", return_value=mock_client):
+            argv_backup = sys.argv
+            sys.argv = ["content_strategy.py", "--input", str(self.stage41_path), "--output", str(self.output_path)]
+            try:
+                import io
+                import contextlib
+
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    exit_code = strat.main()
+            finally:
+                sys.argv = argv_backup
+
+        self.assertEqual(exit_code, 1)
+        output = buf.getvalue()
+        self.assertIn("schema validation failed: unexpected token", output)
+        self.assertIn("400", output)
+        self.assertFalse(self.output_path.exists())
 
 
 # --- 18: existing Stage 4.1 output remains untouched ---
