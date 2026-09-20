@@ -7,7 +7,13 @@ in particular gates every write endpoint (see app/security.py); if it is not set
 writes are refused rather than silently allowed (fail closed).
 """
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# backend/app/config.py -> parents[0]=backend/app, parents[1]=backend, parents[2]=repo root.
+# __file__ is always absolute, so this anchor is independent of the process's CWD.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
@@ -22,6 +28,12 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def stage10_export_abs_path(self) -> Path:
+        """stage10_export_path resolved against the repo root, not the process CWD."""
+        path = Path(self.stage10_export_path)
+        return path if path.is_absolute() else REPO_ROOT / path
 
 
 settings = Settings()

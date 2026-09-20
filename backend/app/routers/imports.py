@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -15,7 +13,7 @@ router = APIRouter(prefix="/api/imports", tags=["imports"])
 def run_import(db: Session = Depends(get_db)):
     """Ingest Stage 10's flyingfish_publish_ready.json - the only file this backend
     ever reads from the AI pipeline's output. Refuses anything not qa_status='PASS'."""
-    path = Path(settings.stage10_export_path)
+    path = settings.stage10_export_abs_path
     try:
         result = import_publish_ready_export(db, path)
     except ContentImportError as e:
