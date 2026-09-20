@@ -789,6 +789,44 @@ _EVIDENCE_BASIS_BANNED_WORDS = (
     "engagement driver, primary driver"
 )
 
+# Real 30-day run #3 failure mode: a retry fixed the ONE violation it was told about
+# (an AI-generated-footage instruction) but introduced a DIFFERENT violation (an
+# unsupported offer/discount claim) while rewriting that item - the validator correctly
+# rejected the second attempt too, so the batch failed even though each individual
+# violation was, in isolation, fixable. The header/reminder/footer below make every
+# retry (not just the specific violations found) reiterate the full safety checklist,
+# so a correction to one field doesn't get a free pass to break a different rule.
+_RETRY_CRITICAL_HEADER = (
+    "CRITICAL: Fix EVERY violation listed below in the same response. Do not fix one "
+    "violation by introducing another violation. Re-check the entire generated package "
+    "against all content-safety rules before returning."
+)
+
+_GLOBAL_SAFETY_REMINDER = (
+    "GLOBAL SAFETY REMINDER (applies to every field in every item, not just the violations "
+    "listed above):\n"
+    "- Do not invent prices.\n"
+    "- Do not invent discounts.\n"
+    "- Do not invent offers.\n"
+    "- Do not invent promotions.\n"
+    "- Do not invent availability.\n"
+    "- Do not invent guarantees.\n"
+    "- Do not invent certifications.\n"
+    "- Do not invent customer/performance statistics.\n"
+    "- Do not invent competitor claims.\n"
+    "- Do not use unsupported causal claims.\n"
+    "- Do not instruct creation of AI-generated underwater footage/video.\n"
+    "- Use real FlyingFish footage only.\n"
+    '- If footage availability is unknown: "Use existing FlyingFish footage if available."\n'
+    "- If a factual claim cannot be verified: use requires_verification=true + "
+    "verification_reason where the existing architecture requires it."
+)
+
+_RETRY_RECHECK_FOOTER = (
+    "Before returning the response, re-check every content item against ALL safety rules, "
+    "not only the violations listed above."
+)
+
 
 def build_retry_feedback(hard_violations: list, package_types: list) -> str:
     """Turn find_content_violations()'s hard-violation strings into package-specific,
@@ -881,8 +919,11 @@ def build_retry_feedback(hard_violations: list, package_types: list) -> str:
             index = int(m.group(1))
             _emit(
                 ("ai_footage", index),
-                f"FOOTAGE CORRECTION (content_items[{index}]): never instruct AI-generated footage/video - "
-                "use real FlyingFish footage, or 'Use existing FlyingFish footage if available.'.",
+                f"FOOTAGE CORRECTION (content_items[{index}]): Remove the AI-generated footage/video "
+                "instruction. Do not ask for AI-generated underwater footage, AI-generated video, "
+                "synthetic footage, generated underwater scenes, or similar content. Use real "
+                "FlyingFish footage. If availability is unknown, write: 'Use existing FlyingFish "
+                "footage if available.'",
             )
             continue
 
@@ -901,8 +942,10 @@ def build_retry_feedback(hard_violations: list, package_types: list) -> str:
             index = int(m.group(1))
             _emit(
                 ("price", index),
-                f"PRICE CLAIM CORRECTION (content_items[{index}]): remove the invented price/currency "
-                "amount, or set requires_verification=true with a verification_reason.",
+                f"PRICE CLAIM CORRECTION (content_items[{index}]): Do not invent an offer, discount, "
+                "promotion, price, or booking incentive. If the calendar topic requires one but no "
+                "verified value is supplied, either remove the claim or mark requires_verification=true "
+                "and provide a verification_reason according to the existing validator rules.",
             )
             continue
 
@@ -911,8 +954,11 @@ def build_retry_feedback(hard_violations: list, package_types: list) -> str:
             index = int(m.group(1))
             _emit(
                 ("offer", index),
-                f"OFFER/DISCOUNT CLAIM CORRECTION (content_items[{index}]): remove the invented offer/ "
-                "discount, or set requires_verification=true with a verification_reason.",
+                f"OFFER/DISCOUNT CLAIM CORRECTION (content_items[{index}]): Do not invent an offer, "
+                "discount, promotion, price, or booking incentive. If the calendar topic requires one "
+                "but no verified value is supplied, either remove the claim or mark "
+                "requires_verification=true and provide a verification_reason according to the "
+                "existing validator rules.",
             )
             continue
 
@@ -949,7 +995,7 @@ def build_retry_feedback(hard_violations: list, package_types: list) -> str:
         # nothing is silently dropped from the retry feedback.
         _emit(("other", v), f"OTHER CORRECTION: {v}")
 
-    return "\n\n".join(blocks)
+    return "\n\n".join([_RETRY_CRITICAL_HEADER, *blocks, _GLOBAL_SAFETY_REMINDER, _RETRY_RECHECK_FOOTER])
 
 
 def generate_batch(

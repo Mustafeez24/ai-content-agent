@@ -648,6 +648,77 @@ class TestHardeningRegression(unittest.TestCase):
         self.assertEqual(violations["hard"], [])
 
 
+# --- Final hardening pass: real 30-day run #3 failed at Batch 2/6 because a retry
+# fixed the ONE violation it was shown (AI-generated footage) but introduced a
+# DIFFERENT violation (an invented offer/discount) while rewriting that item. The
+# validators were correct both times - this hardens the retry prompt to list every
+# violation together with a global safety checklist, so a correction to one field
+# can't quietly break a different rule. ---
+class TestMultiViolationRetryHardening(unittest.TestCase):
+    def _multi_category_hard_violations(self):
+        return [
+            "content_items[2]: instructs AI-generated footage/video - FlyingFish's content "
+            "strategy uses real footage only; use 'Use existing FlyingFish footage if "
+            "available.' instead",
+            "content_items[2]: states a specific offer/discount/promotion without "
+            "requires_verification=true + a verification_reason - offers are never supplied "
+            "to this system and must never be invented",
+            "content_items[4].evidence_basis: uses unsupported causal language ('drives') - "
+            "state only what was observed, or mark evidence_type='hypothesis': 'This drives "
+            "bookings.'",
+        ]
+
+    # Scenario A: retry feedback includes ALL violations when multiple categories exist.
+    def test_retry_feedback_includes_all_violation_categories(self):
+        hard = self._multi_category_hard_violations()
+        feedback = cg.build_retry_feedback(hard, ["reel", "reel", "reel", "reel", "static"])
+        self.assertIn("FOOTAGE CORRECTION", feedback)
+        self.assertIn("OFFER/DISCOUNT CLAIM CORRECTION", feedback)
+        self.assertIn("evidence_basis CORRECTION", feedback)
+
+    # Scenario B: AI-footage correction text is present with the exact required wording.
+    def test_ai_footage_correction_uses_required_wording(self):
+        hard = [self._multi_category_hard_violations()[0]]
+        feedback = cg.build_retry_feedback(hard, ["reel", "reel", "reel"])
+        self.assertIn("AI-generated underwater footage", feedback)
+        self.assertIn("synthetic footage", feedback)
+        self.assertIn("Use existing FlyingFish footage if available.", feedback)
+
+    # Scenario C: offer/discount correction text is present with the exact required wording.
+    def test_offer_correction_uses_required_wording(self):
+        hard = [self._multi_category_hard_violations()[1]]
+        feedback = cg.build_retry_feedback(hard, ["reel", "reel", "reel"])
+        self.assertIn("Do not invent an offer, discount, promotion, price, or booking incentive", feedback)
+        self.assertIn("requires_verification=true", feedback)
+
+    # Scenario D: the global "fix ALL violations" instruction is present.
+    def test_retry_feedback_contains_critical_fix_all_instruction(self):
+        hard = [self._multi_category_hard_violations()[0]]
+        feedback = cg.build_retry_feedback(hard, ["reel"])
+        self.assertIn("CRITICAL: Fix EVERY violation listed below in the same response", feedback)
+        self.assertIn("Do not fix one violation by introducing another violation", feedback)
+        self.assertIn("re-check every content item against ALL safety rules", feedback)
+
+    # Scenario E: retry feedback does not only mention the last violation - all three
+    # categories from a multi-violation batch must each appear, not just the final one.
+    def test_retry_feedback_not_limited_to_last_violation(self):
+        hard = self._multi_category_hard_violations()
+        feedback = cg.build_retry_feedback(hard, ["reel", "reel", "reel", "reel", "static"])
+        self.assertIn("content_items[2]", feedback)
+        self.assertIn("content_items[4]", feedback)
+        self.assertIn("FOOTAGE CORRECTION", feedback)
+        self.assertIn("evidence_basis CORRECTION", feedback)
+
+    # Scenario F: existing single-violation retry behavior remains compatible - the
+    # global safety reminder is present even for a single, already-specific violation.
+    def test_single_violation_retry_still_includes_global_reminder(self):
+        hard = ["content_items[0].cta: missing/too short to be actionable: ''"]
+        feedback = cg.build_retry_feedback(hard, ["static"])
+        self.assertIn("CTA CORRECTION", feedback)
+        self.assertIn("GLOBAL SAFETY REMINDER", feedback)
+        self.assertIn("Do not invent prices", feedback)
+
+
 class TestApplyAutoCorrections(unittest.TestCase):
     def test_soft_violation_sets_requires_verification(self):
         resp = make_content_batch_response(["static"])
@@ -931,6 +1002,61 @@ class TestRetryAndFailure(MainEndToEndMixin, unittest.TestCase):
         )
         self.assertEqual(exit_code, 1)
         self.assertEqual(len(calls), 2)
+        self.assertFalse(self.output_path.exists())
+
+    # Scenario G: the exact real Batch 2/6 shape - attempt 1 has TWO violations on the
+    # same item (AI-generated footage + an invented offer), the retry fixes both at
+    # once, and the batch succeeds.
+    def test_multi_violation_first_attempt_then_clean_retry_succeeds(self):
+        calendar = self.write_calendar(2)
+        package_types = package_types_for(calendar["calendar_items"])
+        bad = make_content_batch_response(package_types)
+        bad["content_items"][0]["footage_note"] = "Generate footage using AI for the underwater scene."
+        bad["content_items"][0]["cta"] = "Book now with our limited-time offer!"
+        good = make_content_batch_response(package_types)
+        exit_code, calls = self.run_main([make_completed_stream("end_turn", bad), make_completed_stream("end_turn", good)])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(calls), 2)
+        second_call_messages = calls[1].kwargs["messages"]
+        self.assertIn("FOOTAGE CORRECTION", second_call_messages[0]["content"])
+        self.assertIn("OFFER/DISCOUNT CLAIM CORRECTION", second_call_messages[0]["content"])
+        self.assertTrue(self.output_path.exists())
+
+    # Scenario H: attempt 1 has AI-footage + offer violations, the retry fixes those
+    # but introduces a NEW causal-language violation instead - reproducing the exact
+    # real failure (fixing one violation while introducing another). The batch must
+    # still fail cleanly, since only one bounded retry is allowed.
+    def test_multi_violation_first_attempt_then_different_violation_on_retry_fails(self):
+        calendar = self.write_calendar(2)
+        package_types = package_types_for(calendar["calendar_items"])
+        first_attempt = make_content_batch_response(package_types)
+        first_attempt["content_items"][0]["footage_note"] = "Generate footage using AI for the underwater scene."
+        first_attempt["content_items"][0]["cta"] = "Book now with our limited-time offer!"
+
+        retry_attempt = make_content_batch_response(package_types)
+        retry_attempt["content_items"][0]["evidence_basis"] = "This format drives strong engagement."
+
+        exit_code, calls = self.run_main(
+            [make_completed_stream("end_turn", first_attempt), make_completed_stream("end_turn", retry_attempt)]
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(calls), 2)
+
+    # Scenario I: no partial output is written after the final failure above.
+    def test_multi_violation_retry_failure_writes_no_output(self):
+        calendar = self.write_calendar(2)
+        package_types = package_types_for(calendar["calendar_items"])
+        first_attempt = make_content_batch_response(package_types)
+        first_attempt["content_items"][0]["footage_note"] = "Generate footage using AI for the underwater scene."
+        first_attempt["content_items"][0]["cta"] = "Book now with our limited-time offer!"
+
+        retry_attempt = make_content_batch_response(package_types)
+        retry_attempt["content_items"][0]["evidence_basis"] = "This format drives strong engagement."
+
+        exit_code, calls = self.run_main(
+            [make_completed_stream("end_turn", first_attempt), make_completed_stream("end_turn", retry_attempt)]
+        )
+        self.assertEqual(exit_code, 1)
         self.assertFalse(self.output_path.exists())
 
 
