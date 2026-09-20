@@ -127,11 +127,18 @@ def make_calendar_item(index=0, **overrides):
     return base
 
 
-def make_calendar_response(days=7):
+def make_calendar_batch_response(start_index=0, count=7, summary=None):
+    """Build one batch's Claude response - items indexed from start_index so that
+    topics stay globally unique across several batches of the same calendar (mirrors
+    what a real multi-batch 30-day run must produce)."""
     return {
-        "calendar_summary": "A balanced mix of testimonial, educational, and community content.",
-        "calendar_items": [make_calendar_item(i) for i in range(days)],
+        "calendar_summary": summary or "A balanced mix of testimonial, educational, and community content.",
+        "calendar_items": [make_calendar_item(start_index + i) for i in range(count)],
     }
+
+
+def make_calendar_response(days=7):
+    return make_calendar_batch_response(0, days)
 
 
 # --- input loading ---
@@ -219,6 +226,38 @@ class TestCalendarSkeleton(unittest.TestCase):
         a = cal.build_calendar_skeleton(7, start_date=date(2026, 1, 1))
         b = cal.build_calendar_skeleton(7, start_date=date(2026, 1, 1))
         self.assertEqual(a, b)
+
+
+# --- calendar batching (Scenarios 1, 2) ---
+class TestBuildBatches(unittest.TestCase):
+    def test_thirty_day_skeleton_splits_into_three_ten_day_batches(self):
+        skeleton = cal.build_calendar_skeleton(30, start_date=date(2026, 1, 1))
+        batches = cal.build_batches(skeleton)
+        self.assertEqual(len(batches), 3)
+        self.assertEqual([len(b) for b in batches], [10, 10, 10])
+        self.assertEqual([b[0]["day_number"] for b in batches], [1, 11, 21])
+        self.assertEqual([b[-1]["day_number"] for b in batches], [10, 20, 30])
+
+    def test_seven_day_skeleton_is_a_single_batch(self):
+        skeleton = cal.build_calendar_skeleton(7, start_date=date(2026, 1, 1))
+        batches = cal.build_batches(skeleton)
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(len(batches[0]), 7)
+
+    def test_batches_cover_every_slot_exactly_once_in_order(self):
+        skeleton = cal.build_calendar_skeleton(30, start_date=date(2026, 1, 1))
+        batches = cal.build_batches(skeleton)
+        flattened = [slot for batch in batches for slot in batch]
+        self.assertEqual(flattened, skeleton)
+
+
+class TestTokenBudgetForBatch(unittest.TestCase):
+    def test_budget_scales_with_batch_size(self):
+        base_small, retry_small = cal.token_budget_for_batch(7)
+        base_large, retry_large = cal.token_budget_for_batch(10)
+        self.assertLess(base_small, base_large)
+        self.assertLess(retry_small, retry_large)
+        self.assertGreater(retry_large, base_large)
 
 
 # --- schema complexity regression (same lessons as Stage 6) ---
@@ -426,6 +465,35 @@ class TestCalendarViolations(unittest.TestCase):
         violations = cal.find_calendar_violations(resp, VALID_POST_IDS, expected_days=1)
         self.assertTrue(any("calendar" in v.lower() for v in violations["hard"]))
 
+    # --- cross-batch checks (Scenario 10: duplicate topics across different batches) ---
+    def test_topic_duplicating_an_earlier_batchs_topic_is_hard_violation(self):
+        resp = make_calendar_response(1)
+        resp["calendar_items"][0]["topic"] = "Beginner scuba preparation checklist"
+        violations = cal.find_calendar_violations(
+            resp, VALID_POST_IDS, expected_days=1,
+            existing_topics={"beginner scuba preparation checklist"},
+        )
+        self.assertTrue(any("earlier batch" in v.lower() for v in violations["hard"]))
+
+    def test_topic_not_in_existing_topics_is_allowed(self):
+        resp = make_calendar_response(1)
+        violations = cal.find_calendar_violations(
+            resp, VALID_POST_IDS, expected_days=1,
+            existing_topics={"a completely different topic used earlier"},
+        )
+        self.assertEqual(violations["hard"], [])
+
+    # --- batch item count (Scenarios 3, 7 - the real 34-vs-30 overproduction bug) ---
+    def test_batch_response_with_more_items_than_batch_size_is_rejected(self):
+        resp = make_calendar_batch_response(0, 13)
+        violations = cal.find_calendar_violations(resp, VALID_POST_IDS, expected_days=10)
+        self.assertTrue(any("exactly 10" in v for v in violations["hard"]))
+
+    def test_batch_response_with_exact_item_count_is_valid(self):
+        resp = make_calendar_batch_response(0, 10)
+        violations = cal.find_calendar_violations(resp, VALID_POST_IDS, expected_days=10)
+        self.assertEqual(violations["hard"], [])
+
 
 # --- deterministic assembly ---
 class TestAssembleCalendarItems(unittest.TestCase):
@@ -521,21 +589,111 @@ class TestValidResponseEndToEnd(MainEndToEndMixin, unittest.TestCase):
         self.assertEqual(output["calendar_items"][0]["day_number"], 1)
         self.assertEqual(output["calendar_items"][-1]["day_number"], 7)
 
-    def test_valid_thirty_day_calendar_succeeds(self):
-        exit_code, calls = self.run_main(
-            [make_completed_stream("end_turn", make_calendar_response(30))], extra_args=["--days", "30"]
-        )
+    def test_valid_thirty_day_calendar_succeeds_with_three_batches(self):
+        # Regression test for the real 30-day failure: a single 30-item request
+        # overproduced and hit the SDK's non-streaming 10-minute guard. 30 days must
+        # now be generated as three independent 10-item batches.
+        batch_responses = [
+            make_completed_stream("end_turn", make_calendar_batch_response(0, 10)),
+            make_completed_stream("end_turn", make_calendar_batch_response(10, 10)),
+            make_completed_stream("end_turn", make_calendar_batch_response(20, 10)),
+        ]
+        exit_code, calls = self.run_main(batch_responses, extra_args=["--days", "30"])
         self.assertEqual(exit_code, 0)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 3)
+        for call in calls:
+            self.assertEqual(call.kwargs["max_tokens"], cal.token_budget_for_batch(10)[0])
         with open(self.output_path) as f:
             output = json.load(f)
         self.assertEqual(len(output["calendar_items"]), 30)
         self.assertEqual(output["metadata"]["days"], 30)
+        self.assertEqual(output["metadata"]["batches"], 3)
+        day_numbers = [item["day_number"] for item in output["calendar_items"]]
+        self.assertEqual(sorted(day_numbers), list(range(1, 31)))
+        self.assertEqual(len(set(day_numbers)), 30)
 
     def test_invalid_days_argument_rejected(self):
         exit_code, calls = self.run_main([], extra_args=["--days", "0"])
         self.assertEqual(exit_code, 1)
         self.assertEqual(len(calls), 0)
+
+
+class TestBatchedGenerationEndToEnd(MainEndToEndMixin, unittest.TestCase):
+    """End-to-end regression tests for the real 30-day batching failure and fix."""
+
+    def test_first_batch_invalid_then_retry_succeeds_remaining_batches_proceed(self):
+        # Scenarios 4 & 5: batch 1's first attempt violates evidence-safety rules,
+        # its retry is clean, and batches 2/3 each succeed on their first attempt.
+        bad_batch1 = make_calendar_batch_response(0, 10)
+        bad_batch1["calendar_items"][0]["evidence_basis"] = "This is the primary engagement driver."
+        good_batch1 = make_calendar_batch_response(0, 10)
+        responses = [
+            make_completed_stream("end_turn", bad_batch1),
+            make_completed_stream("end_turn", good_batch1),
+            make_completed_stream("end_turn", make_calendar_batch_response(10, 10)),
+            make_completed_stream("end_turn", make_calendar_batch_response(20, 10)),
+        ]
+        exit_code, calls = self.run_main(responses, extra_args=["--days", "30"])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(calls), 4)
+        self.assertIn("CORRECTION REQUIRED", calls[1].kwargs["messages"][0]["content"])
+        with open(self.output_path) as f:
+            output = json.load(f)
+        self.assertEqual(len(output["calendar_items"]), 30)
+
+    def test_second_attempt_still_invalid_fails_entire_generation(self):
+        # Scenario 6: batch 1's retry is still invalid - the whole 30-day generation
+        # fails cleanly, and later batches are never even attempted.
+        bad = make_calendar_batch_response(0, 10)
+        bad["calendar_items"][0]["evidence_basis"] = "This is the primary engagement driver."
+        responses = [
+            make_completed_stream("end_turn", bad),
+            make_completed_stream("end_turn", bad),
+        ]
+        exit_code, calls = self.run_main(responses, extra_args=["--days", "30"])
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(self.output_path.exists())
+
+    def test_invented_post_id_in_a_later_batch_fails_entire_generation(self):
+        # Scenario 11: batch 1 succeeds, batch 2 cites a post_id Stage 6 never
+        # verified, both of batch 2's attempts are invalid - generation fails cleanly.
+        bad_batch2 = make_calendar_batch_response(10, 10)
+        bad_batch2["calendar_items"][0]["source_post_ids"] = ["POST_NEVER_VERIFIED"]
+        responses = [
+            make_completed_stream("end_turn", make_calendar_batch_response(0, 10)),
+            make_completed_stream("end_turn", bad_batch2),
+            make_completed_stream("end_turn", bad_batch2),
+        ]
+        exit_code, calls = self.run_main(responses, extra_args=["--days", "30"])
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(self.output_path.exists())
+
+    def test_duplicate_topic_across_batches_fails_entire_generation(self):
+        # Scenario 10 (end-to-end): batch 2 repeats a topic batch 1 already used.
+        duplicate_topic = make_calendar_batch_response(0, 10)["calendar_items"][0]["topic"]
+        bad_batch2 = make_calendar_batch_response(10, 10)
+        bad_batch2["calendar_items"][0]["topic"] = duplicate_topic
+        responses = [
+            make_completed_stream("end_turn", make_calendar_batch_response(0, 10)),
+            make_completed_stream("end_turn", bad_batch2),
+            make_completed_stream("end_turn", bad_batch2),
+        ]
+        exit_code, calls = self.run_main(responses, extra_args=["--days", "30"])
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(self.output_path.exists())
+
+    def test_seven_day_run_still_uses_exactly_one_batch(self):
+        # Scenario 14: the pre-existing 7-day behavior must remain a single batch/call.
+        exit_code, calls = self.run_main([make_completed_stream("end_turn", make_calendar_response(7))])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(calls), 1)
+        with open(self.output_path) as f:
+            output = json.load(f)
+        self.assertEqual(output["metadata"]["batches"], 1)
+        self.assertEqual(len(output["calendar_items"]), 7)
 
 
 class TestTruncation(MainEndToEndMixin, unittest.TestCase):

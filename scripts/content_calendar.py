@@ -70,6 +70,18 @@ REQUIRED_SECTIONS = [
 
 DEFAULT_DAYS = 7
 
+# Calendar generation is batched in chunks of at most BATCH_SIZE days per Claude call.
+# A --days 7 run is exactly one batch of 7 (byte-for-byte the same request shape as
+# before batching existed). A --days 30 run is split into 3 batches of 10. This is
+# what fixed the real 30-day failure: a single 30-item request produced an
+# overproduced (34-item), causal-language-violating, evidence-incomplete response,
+# and the retry at a higher max_tokens then tripped the Anthropic SDK's
+# "Streaming is required for operations that may take longer than 10 minutes" guard.
+# Smaller, bounded-size requests avoid both problems - less for Claude to get wrong
+# per call, and a request small enough to reliably finish well under 10 minutes
+# without streaming.
+BATCH_SIZE = 10
+
 # Platform rotation is entirely deterministic - Claude never chooses or invents a
 # platform. Initially Instagram + Google Business Profile only, per project scope;
 # Quora/Reddit are a separate future module.
@@ -152,10 +164,18 @@ def build_calendar_skeleton(days: int, start_date=None) -> list:
     ]
 
 
-def build_calendar_payload(strategy: dict, skeleton: list) -> dict:
-    """Compact input for Claude - Stage 6's own evidence-classified items plus the
-    fixed calendar skeleton to fill in. Stage 6 already distilled the raw analysis
-    down to evidence-classified findings, so this is already small."""
+def build_batches(skeleton: list, batch_size: int = BATCH_SIZE) -> list:
+    """Split the full deterministic skeleton into batch_size-day chunks, in day order.
+    A skeleton no longer than batch_size yields a single batch containing the whole
+    thing - the --days 7 path is exactly one such batch."""
+    return [skeleton[i : i + batch_size] for i in range(0, len(skeleton), batch_size)]
+
+
+def build_calendar_payload(strategy: dict, batch_skeleton: list, used_topics: set = None) -> dict:
+    """Compact input for Claude - Stage 6's own evidence-classified items (the SAME
+    full evidence context for every batch, so all batches interpret the strategy
+    consistently) plus the fixed calendar slots THIS batch must fill in, and the
+    topics already used by earlier batches so this one doesn't repeat them."""
     return {
         "executive_summary": strategy.get("executive_summary"),
         "content_opportunities": strategy.get("content_opportunities", []),
@@ -163,21 +183,26 @@ def build_calendar_payload(strategy: dict, skeleton: list) -> dict:
         "recommended_formats": strategy.get("recommended_formats", []),
         "recommended_tests": strategy.get("recommended_tests", []),
         "known_post_ids": sorted(known_post_ids(strategy)),
-        "calendar_slots": skeleton,
+        "calendar_slots": batch_skeleton,
+        "already_used_topics": sorted(used_topics or ()),
     }
 
 
-def _build_system_prompt(days: int) -> str:
+def _build_system_prompt(batch_size: int) -> str:
     today = datetime.now(timezone.utc).strftime("%B %Y")
     return f"""You are the Content Calendar Generator for FlyingFish Scuba School, \
 a scuba diving school at Novotel Resort & Spa, Candolim, Goa, India, offering SSI and \
 PADI certifications. The current date is {today}.
 
 You will receive Stage 6's verified content strategy (content_opportunities, \
-strategy_themes, recommended_formats, recommended_tests) and a fixed "calendar_slots" \
-list of exactly {days} day_number/date/platform slots. Your job is to fill in ONE \
-concrete, actionable content item per slot, in the SAME ORDER as calendar_slots - \
-return exactly {days} items in "calendar_items", item[i] corresponding to \
+strategy_themes, recommended_formats, recommended_tests), a fixed "calendar_slots" \
+list of exactly {batch_size} day_number/date/platform slots for THIS batch (a longer \
+calendar is generated as several smaller batches - you only ever see one batch's \
+slots at a time), and "already_used_topics" - topics already assigned in earlier \
+batches of the same calendar, which you must NOT repeat. Your job is to fill in ONE \
+concrete, actionable content item per slot, in the SAME ORDER as calendar_slots. \
+Return EXACTLY {batch_size} calendar items - one item for each supplied calendar \
+slot. Never return additional items, and never return fewer. item[i] corresponds to \
 calendar_slots[i]. Do NOT generate day_number, date, or platform yourself - those are \
 fixed and are not part of your output schema; just use calendar_slots to know what \
 platform each item is for (Instagram vs. Google Business Profile posts read \
@@ -226,7 +251,10 @@ source_post_ids and evidence_basis, and vary the format across the week/month ra
 than repeating the same one every day - draw the actual mix from what Stage 6's \
 recommended_formats/content_opportunities support, choosing from exactly these format \
 labels for "content_type" (use one of these strings exactly, lowercase or not): Reel, \
-Carousel, Static Post, Story, Educational Post, FAQ, Q&A, Community Content.
+Carousel, Static Post, Story, Educational Post, FAQ, Q&A, Community Content. Every \
+"topic" must be distinct from every other item in this batch AND from every topic \
+listed in "already_used_topics" - pick a different angle or evidence item rather than \
+rephrasing one already used.
 
 FlyingFish content areas to draw from (only where supported by the Stage 6 evidence \
 you were given - do not invent new USPs, prices, or facts): beginner scuba diving, \
@@ -255,10 +283,10 @@ before or after) matching exactly the schema you are given."""
 CONTENT_CALENDAR_SYSTEM_PROMPT_CACHE = {}
 
 
-def build_system_prompt(days: int) -> str:
-    if days not in CONTENT_CALENDAR_SYSTEM_PROMPT_CACHE:
-        CONTENT_CALENDAR_SYSTEM_PROMPT_CACHE[days] = _build_system_prompt(days)
-    return CONTENT_CALENDAR_SYSTEM_PROMPT_CACHE[days]
+def build_system_prompt(batch_size: int) -> str:
+    if batch_size not in CONTENT_CALENDAR_SYSTEM_PROMPT_CACHE:
+        CONTENT_CALENDAR_SYSTEM_PROMPT_CACHE[batch_size] = _build_system_prompt(batch_size)
+    return CONTENT_CALENDAR_SYSTEM_PROMPT_CACHE[batch_size]
 
 
 # Evidence fields shared by every calendar item - deliberately NOT enums and NOT
@@ -312,33 +340,38 @@ CONTENT_CALENDAR_RESPONSE_SCHEMA = {
     "additionalProperties": False,
 }
 
-# 8000/14000 for a 7-day calendar; scaled up for 30 days, mirroring Stage 6's
-# measured-safe 8000/12000 budget for a similarly-shaped, similarly-sized response but
-# accounting for up to ~4x the item count.
-BASE_MAX_TOKENS_7DAY = 8000
-RETRY_MAX_TOKENS_7DAY = 14000
-BASE_MAX_TOKENS_30DAY = 16000
-RETRY_MAX_TOKENS_30DAY = 24000
+# Sized per-batch (never per full calendar) - every Claude call now requests at most
+# BATCH_SIZE items, mirroring Stage 6's measured-safe 8000/12000 budget for a
+# similarly-shaped, similarly-sized response. A --days 7 run's single batch (7 items)
+# gets essentially the same budget as before batching existed; a 30-day run's three
+# 10-item batches each get a somewhat larger one - but every individual request stays
+# well below the size that previously tripped max_tokens truncation and the SDK's
+# non-streaming 10-minute guard.
+TOKENS_OVERHEAD_BASE = 2500
+TOKENS_PER_ITEM_BASE = 800
+TOKENS_OVERHEAD_RETRY = 3000
+TOKENS_PER_ITEM_RETRY = 1400
 
 
-def token_budget(days: int) -> tuple:
-    if days > 7:
-        return BASE_MAX_TOKENS_30DAY, RETRY_MAX_TOKENS_30DAY
-    return BASE_MAX_TOKENS_7DAY, RETRY_MAX_TOKENS_7DAY
+def token_budget_for_batch(batch_size: int) -> tuple:
+    base = TOKENS_OVERHEAD_BASE + TOKENS_PER_ITEM_BASE * batch_size
+    retry = TOKENS_OVERHEAD_RETRY + TOKENS_PER_ITEM_RETRY * batch_size
+    return base, retry
 
 
 class TruncatedResponseError(Exception):
     """Raised when Claude's response was cut off by the token limit before completing."""
 
 
-def call_claude(api_key: str, payload: dict, days: int, max_tokens: int, extra_note: str = None) -> tuple:
+def call_claude(api_key: str, payload: dict, batch_size: int, max_tokens: int, extra_note: str = None) -> tuple:
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key)
     user_message = (
         "Here is the Stage 6 Content Strategy report for FlyingFish Scuba School and "
-        f"the fixed {days}-day calendar skeleton to fill in. Build the calendar strictly "
-        "from this evidence.\n\n" + json.dumps(payload, ensure_ascii=False)
+        f"the fixed {batch_size}-slot calendar batch to fill in. Return exactly "
+        f"{batch_size} calendar items, one per supplied calendar slot, never more. "
+        "Build the calendar strictly from this evidence.\n\n" + json.dumps(payload, ensure_ascii=False)
     )
     if extra_note:
         user_message += f"\n\nCORRECTION REQUIRED: {extra_note}"
@@ -346,7 +379,7 @@ def call_claude(api_key: str, payload: dict, days: int, max_tokens: int, extra_n
     response = client.messages.create(
         model=MODEL,
         max_tokens=max_tokens,
-        system=build_system_prompt(days),
+        system=build_system_prompt(batch_size),
         messages=[{"role": "user", "content": user_message}],
         output_config={"format": {"type": "json_schema", "schema": CONTENT_CALENDAR_RESPONSE_SCHEMA}},
     )
@@ -389,11 +422,18 @@ _VAGUE_TOPICS = {
 }
 
 
-def find_calendar_violations(data: dict, valid_post_ids: set, expected_days: int) -> dict:
+def find_calendar_violations(
+    data: dict, valid_post_ids: set, expected_days: int, existing_topics: set = None
+) -> dict:
     """Check calendar_items against the hardening rules, mirroring Stage 6's
-    hard-vs-soft violation model. Returns {"hard": [...], "soft": [{"loc","type","detail"}, ...]}."""
+    hard-vs-soft violation model. existing_topics is the set of lowercased topics
+    already used by earlier batches of the same calendar (empty/None for a
+    single-batch run or the first batch) - a topic repeating one of these is rejected
+    exactly like a within-this-response duplicate. Returns
+    {"hard": [...], "soft": [{"loc","type","detail"}, ...]}."""
     hard = []
     soft = []
+    existing_topics = existing_topics or set()
 
     items = data.get("calendar_items", [])
     if len(items) != expected_days:
@@ -414,6 +454,11 @@ def find_calendar_violations(data: dict, valid_post_ids: set, expected_days: int
             hard.append(f"{loc}.topic: too short/empty to be actionable: {topic!r}")
         elif topic.lower() in _VAGUE_TOPICS:
             hard.append(f"{loc}.topic: too generic/vague to be actionable: {topic!r}")
+        elif topic.lower() in existing_topics:
+            hard.append(
+                f"{loc}.topic: duplicate of a topic already used in an earlier batch of this "
+                f"calendar: {topic!r}"
+            )
         elif topic:
             seen_topics.setdefault(topic.lower(), []).append(i)
 
@@ -499,6 +544,81 @@ def assemble_calendar_items(claude_items: list, skeleton: list) -> list:
     return assembled
 
 
+def generate_batch(
+    api_key: str,
+    strategy: dict,
+    batch_skeleton: list,
+    used_topics: set,
+    valid_post_ids: set,
+    api_errors: tuple,
+    describe_api_error,
+) -> tuple:
+    """Generate and validate ONE batch (at most BATCH_SIZE calendar slots), using the
+    same bounded 2-call retry architecture as Stage 6: one normal attempt, one retry
+    only if the first was truncated, unparseable/invalid, or violated an
+    evidence-safety rule - never silently accepted. Returns
+    (calendar_items, calendar_summary, response, error_message): on failure,
+    calendar_items and calendar_summary are None and error_message is set;
+    on success error_message is None."""
+    batch_size = len(batch_skeleton)
+    payload = build_calendar_payload(strategy, batch_skeleton, used_topics)
+    base_tokens, retry_tokens = token_budget_for_batch(batch_size)
+    claude_result = None
+    response = None
+    last_error = None
+    extra_note = None
+
+    for attempt, max_tokens in enumerate([base_tokens, retry_tokens], start=1):
+        try:
+            text, response = call_claude(api_key, payload, batch_size, max_tokens=max_tokens, extra_note=extra_note)
+        except TruncatedResponseError as e:
+            last_error = str(e)
+            if attempt == 1:
+                print(f"{e} Retrying once with max_tokens={retry_tokens}...")
+                continue
+            return None, None, response, (
+                f"Response was truncated even at max_tokens={retry_tokens}. "
+                "The batch or requested output is too large for this budget."
+            )
+        except api_errors as e:
+            return None, None, None, describe_api_error(e)
+
+        try:
+            claude_result = extract_json_object(text)
+            validate_calendar_response(claude_result)
+        except (json.JSONDecodeError, DataError) as e:
+            last_error = str(e)
+            claude_result = None
+            if attempt == 1:
+                print(f"Batch response was invalid ({e}) - retrying once with max_tokens={retry_tokens}...")
+                extra_note = f"Your previous response was invalid ({e}). Return ONLY the corrected JSON object."
+                continue
+            return None, None, response, f"Claude did not return a valid, complete batch response after retry: {last_error}"
+
+        violations = find_calendar_violations(claude_result, valid_post_ids, batch_size, existing_topics=used_topics)
+        if violations["hard"]:
+            last_error = "; ".join(violations["hard"])
+            if attempt == 1:
+                print("Batch response violated evidence-safety rules - retrying once:")
+                for v in violations["hard"]:
+                    print(f"  - {v}")
+                extra_note = (
+                    "Your previous response violated the evidence-safety rules and cannot be "
+                    "published as-is. Fix these specific issues: " + " | ".join(violations["hard"])
+                )
+                claude_result = None
+                continue
+            return None, None, response, "Batch response still violates evidence-safety rules after retry: " + "; ".join(
+                violations["hard"]
+            )
+        break
+
+    if claude_result is None:
+        return None, None, response, last_error
+
+    return claude_result.get("calendar_items", []), claude_result.get("calendar_summary", ""), response, None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH, help="Path to the Stage 6 Content Strategy report.")
@@ -539,13 +659,18 @@ def main() -> int:
     print(f"known post_ids available as evidence: {len(known_post_ids(strategy))}")
     print()
 
-    skeleton = build_calendar_skeleton(args.days)
-    payload = build_calendar_payload(strategy, skeleton)
-    print(f"=== Compact Calendar input prepared ({args.days}-day) ===")
-    payload_json = json.dumps(payload, ensure_ascii=False)
-    print(f"Approx payload size: {len(payload_json)} chars")
-    gbp_days = sum(1 for slot in skeleton if slot["platform"] == "Google Business Profile")
-    print(f"Platform mix: {args.days - gbp_days} Instagram, {gbp_days} Google Business Profile")
+    full_skeleton = build_calendar_skeleton(args.days)
+    batches = build_batches(full_skeleton)
+    print(f"=== Calendar batching ({args.days}-day) ===")
+    print(f"Batches: {len(batches)} (sizes: {[len(b) for b in batches]})")
+    for i, b in enumerate(batches, start=1):
+        gbp = sum(1 for slot in b if slot["platform"] == "Google Business Profile")
+        payload_json = json.dumps(build_calendar_payload(strategy, b), ensure_ascii=False)
+        print(
+            f"  Batch {i}: days {b[0]['day_number']}-{b[-1]['day_number']}, "
+            f"{len(b) - gbp} Instagram / {gbp} Google Business Profile, "
+            f"approx payload size {len(payload_json)} chars"
+        )
     print()
 
     if args.dry_run:
@@ -582,68 +707,59 @@ def main() -> int:
             return "Network error - could not reach the Anthropic API."
         return f"API error (status {e.status_code}): {extract_api_error_message(e)}"
 
-    base_tokens, retry_tokens = token_budget(args.days)
-    claude_result = None
-    response = None
-    last_error = None
-    extra_note = None
     valid_post_ids = known_post_ids(strategy)
+    used_topics = set()
+    all_claude_items = []
+    responses = []
+    calendar_summaries = []
 
-    # At most two Claude calls total, exactly like Stage 6: one normal attempt, one
-    # retry only if the first was truncated, unparseable/invalid, or violated an
-    # evidence-safety rule.
-    for attempt, max_tokens in enumerate([base_tokens, retry_tokens], start=1):
-        try:
-            text, response = call_claude(api_key, payload, args.days, max_tokens=max_tokens, extra_note=extra_note)
-        except TruncatedResponseError as e:
-            last_error = str(e)
-            if attempt == 1:
-                print(f"{e} Retrying once with max_tokens={retry_tokens}...")
-                continue
-            print(f"FAILED: Response was truncated even at max_tokens={retry_tokens}. "
-                  "The payload or requested output is too large for this budget.")
-            return 1
-        except api_errors as e:
-            print(f"FAILED: {describe_api_error(e)}")
-            return 1
-
-        try:
-            claude_result = extract_json_object(text)
-            validate_calendar_response(claude_result)
-        except (json.JSONDecodeError, DataError) as e:
-            last_error = str(e)
-            claude_result = None
-            if attempt == 1:
-                print(f"Claude's response was invalid ({e}) - retrying once with max_tokens={retry_tokens}...")
-                extra_note = f"Your previous response was invalid ({e}). Return ONLY the corrected JSON object."
-                continue
-            print(f"FAILED: Claude did not return a valid, complete response after retry: {last_error}")
+    # Each batch runs its own bounded 2-call retry (see generate_batch). If a batch's
+    # second attempt still fails, the entire multi-day generation fails cleanly here -
+    # no partial calendar is ever written.
+    for i, batch_skeleton in enumerate(batches, start=1):
+        print(
+            f"=== Generating batch {i}/{len(batches)} "
+            f"(days {batch_skeleton[0]['day_number']}-{batch_skeleton[-1]['day_number']}) ==="
+        )
+        items, summary, response, error = generate_batch(
+            api_key, strategy, batch_skeleton, used_topics, valid_post_ids, api_errors, describe_api_error
+        )
+        if error is not None:
+            print(f"FAILED: Batch {i}/{len(batches)} could not be generated: {error}")
+            print("No output file written - the full calendar was not completed.")
             return 1
 
-        violations = find_calendar_violations(claude_result, valid_post_ids, args.days)
-        if violations["hard"]:
-            last_error = "; ".join(violations["hard"])
-            if attempt == 1:
-                print("Claude's response violated evidence-safety rules - retrying once:")
-                for v in violations["hard"]:
-                    print(f"  - {v}")
-                extra_note = (
-                    "Your previous response violated the evidence-safety rules and cannot be "
-                    "published as-is. Fix these specific issues: " + " | ".join(violations["hard"])
-                )
-                claude_result = None
-                continue
-            print("FAILED: Claude's response still violates evidence-safety rules after retry:")
-            for v in violations["hard"]:
-                print(f"  - {v}")
-            return 1
-        break
+        all_claude_items.extend(items)
+        for item in items:
+            topic = str(item.get("topic", "")).strip().lower()
+            if topic:
+                used_topics.add(topic)
+        responses.append(response)
+        calendar_summaries.append(summary)
+        print(f"Batch {i}/{len(batches)} succeeded ({len(items)} items).")
+        print()
 
-    if claude_result is None:
-        print(f"FAILED: Could not obtain a valid, safe response from Claude: {last_error}")
+    # Final validation across the FULL merged calendar, not just each batch in
+    # isolation - re-runs every evidence-safety/format/duplicate-topic check over all
+    # args.days items together before anything is written.
+    merged = {
+        "calendar_summary": " ".join(s for s in calendar_summaries if s),
+        "calendar_items": all_claude_items,
+    }
+    violations = find_calendar_violations(merged, valid_post_ids, args.days)
+    if violations["hard"]:
+        print("FAILED: Merged calendar failed final validation:")
+        for v in violations["hard"]:
+            print(f"  - {v}")
+        print("No output file written.")
         return 1
 
-    calendar_items = assemble_calendar_items(claude_result.get("calendar_items", []), skeleton)
+    day_numbers = [slot["day_number"] for slot in full_skeleton]
+    if len(all_claude_items) != len(full_skeleton) or sorted(day_numbers) != list(range(1, args.days + 1)):
+        print("FAILED: Internal error - merged calendar does not cover exactly days 1..N.")
+        return 1
+
+    calendar_items = assemble_calendar_items(all_claude_items, full_skeleton)
 
     output = {
         "metadata": {
@@ -653,8 +769,9 @@ def main() -> int:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "days": args.days,
             "evidence_items_considered": evidence_item_count,
+            "batches": len(batches),
         },
-        "calendar_summary": claude_result.get("calendar_summary", "unknown"),
+        "calendar_summary": merged["calendar_summary"] or "unknown",
         "calendar_items": calendar_items,
     }
 
@@ -662,13 +779,20 @@ def main() -> int:
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
+    total_input_tokens = sum(r.usage.input_tokens for r in responses)
+    total_output_tokens = sum(r.usage.output_tokens for r in responses)
+
     print("SUCCESS: Content Calendar generation complete.")
     print(f"Days planned: {args.days}")
+    print(f"Batches used: {len(batches)}")
     print(f"Evidence items considered: {evidence_item_count}")
     print(f"Model used: {MODEL}")
-    print(f"Token usage: {response.usage.input_tokens} in / {response.usage.output_tokens} out")
-    input_cost = response.usage.input_tokens / 1_000_000 * 1.00
-    output_cost = response.usage.output_tokens / 1_000_000 * 5.00
+    print(
+        f"Token usage: {total_input_tokens} in / {total_output_tokens} out "
+        f"(summed across {len(responses)} batch call(s))"
+    )
+    input_cost = total_input_tokens / 1_000_000 * 1.00
+    output_cost = total_output_tokens / 1_000_000 * 5.00
     print(f"Approx. cost (Haiku 4.5 list pricing): ${input_cost + output_cost:.4f} USD")
     print(f"Saved content calendar to: {args.output}")
 
