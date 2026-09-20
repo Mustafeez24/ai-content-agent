@@ -551,6 +551,103 @@ class TestContentViolations(unittest.TestCase):
         self.assertEqual(violations["hard"], [])
 
 
+# --- Hardening pass: regression tests for the real Batch 4/6 failure (Static Post
+# with empty headline/body, then a causal "drive" in evidence_basis on retry) ---
+class TestHardeningRegression(unittest.TestCase):
+    # Scenario 1: Static Post with empty headline fails.
+    def test_static_post_empty_headline_fails(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["headline"] = ""
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        self.assertTrue(any(".headline" in v for v in violations["hard"]))
+
+    # Scenario 2: Static Post with empty body fails.
+    def test_static_post_empty_body_fails(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["body"] = ""
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        self.assertTrue(any(".body" in v for v in violations["hard"]))
+
+    # Scenario 3: Static Post with both empty fails (the exact real-run shape).
+    def test_static_post_empty_headline_and_body_fails(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["headline"] = ""
+        resp["content_items"][0]["body"] = ""
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        self.assertTrue(any(".headline" in v for v in violations["hard"]))
+        self.assertTrue(any(".body" in v for v in violations["hard"]))
+
+    # Scenario 4: retry feedback contains a Static Post-specific correction.
+    def test_retry_feedback_contains_static_post_correction(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["headline"] = ""
+        resp["content_items"][0]["body"] = ""
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        feedback = cg.build_retry_feedback(violations["hard"], ["static"])
+        self.assertIn("STATIC POST CORRECTION", feedback)
+        self.assertIn("content_items[0]", feedback)
+        self.assertIn("headline", feedback)
+        self.assertIn("Do not leave any required field empty", feedback)
+
+    def test_retry_feedback_contains_gbp_specific_correction(self):
+        resp = make_content_batch_response(["gbp"])
+        resp["content_items"][0]["headline"] = ""
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["gbp"])
+        feedback = cg.build_retry_feedback(violations["hard"], ["gbp"])
+        self.assertIn("GOOGLE BUSINESS PROFILE POST CORRECTION", feedback)
+
+    # Scenarios 5-7: each individual causal word rejected in evidence_basis.
+    def test_causal_drive_in_evidence_basis_fails(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["evidence_basis"] = "This content will drive interest in diving."
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        self.assertTrue(any("causal" in v.lower() and "evidence_basis" in v for v in violations["hard"]))
+
+    def test_causal_drives_in_evidence_basis_fails(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["evidence_basis"] = "Marine-life interest drives booking motivation."
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        self.assertTrue(any("causal" in v.lower() and "evidence_basis" in v for v in violations["hard"]))
+
+    def test_causal_driving_in_evidence_basis_fails(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["evidence_basis"] = "This is driving strong interest in the format."
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        self.assertTrue(any("causal" in v.lower() and "evidence_basis" in v for v in violations["hard"]))
+
+    def test_causal_boost_in_evidence_basis_fails(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["evidence_basis"] = "This content will boost booking motivation."
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        self.assertTrue(any("causal" in v.lower() and "boost" in v.lower() for v in violations["hard"]))
+
+    def test_causal_boosts_in_evidence_basis_fails(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["evidence_basis"] = "This format boosts booking motivation."
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        self.assertTrue(any("causal" in v.lower() and "boost" in v.lower() for v in violations["hard"]))
+
+    # Scenario 8: corrected, non-causal evidence_basis passes.
+    def test_corrected_non_causal_evidence_basis_passes(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["evidence_basis"] = (
+            "This content tests a static-post format using the documented marine-life interest pattern."
+        )
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        self.assertEqual(violations["hard"], [])
+
+    # Scenario 9: hypothesis wording passes where appropriate.
+    def test_hypothesis_framed_evidence_basis_passes(self):
+        resp = make_content_batch_response(["static"])
+        resp["content_items"][0]["evidence_type"] = "hypothesis"
+        resp["content_items"][0]["source_post_ids"] = []
+        resp["content_items"][0]["evidence_basis"] = (
+            "Hypothesis: marine-life-focused static content may be useful to test for booking interest."
+        )
+        violations = cg.find_content_violations(resp, VALID_POST_IDS, 1, ["static"])
+        self.assertEqual(violations["hard"], [])
+
+
 class TestApplyAutoCorrections(unittest.TestCase):
     def test_soft_violation_sets_requires_verification(self):
         resp = make_content_batch_response(["static"])
@@ -792,6 +889,48 @@ class TestRetryAndFailure(MainEndToEndMixin, unittest.TestCase):
         exit_code, calls = self.run_main(responses)
         self.assertEqual(exit_code, 1)
         self.assertEqual(len(calls), 3)
+        self.assertFalse(self.output_path.exists())
+
+    # Scenario 10: Static Post retry succeeds after an invalid first response - the
+    # real Batch 4/6 shape (empty headline/body first attempt), but the retry is clean.
+    def test_static_post_empty_fields_then_clean_retry_succeeds(self):
+        calendar = self.write_calendar(3)
+        package_types = package_types_for(calendar["calendar_items"])
+        bad = make_content_batch_response(package_types)
+        static_index = package_types.index("static")
+        bad["content_items"][static_index]["headline"] = ""
+        bad["content_items"][static_index]["body"] = ""
+        good = make_content_batch_response(package_types)
+        exit_code, calls = self.run_main([make_completed_stream("end_turn", bad), make_completed_stream("end_turn", good)])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(calls), 2)
+        second_call_messages = calls[1].kwargs["messages"]
+        self.assertIn("STATIC POST CORRECTION", second_call_messages[0]["content"])
+        self.assertTrue(self.output_path.exists())
+
+    # Scenarios 11 & 12: the exact real failure - first attempt has an empty Static
+    # Post headline/body, the retry response instead introduces causal "drive" wording
+    # in evidence_basis. Both attempts are invalid, so the whole batch (and run) must
+    # fail cleanly with no output written.
+    def test_static_post_empty_fields_then_causal_retry_still_fails(self):
+        calendar = self.write_calendar(3)
+        package_types = package_types_for(calendar["calendar_items"])
+        static_index = package_types.index("static")
+
+        first_attempt = make_content_batch_response(package_types)
+        first_attempt["content_items"][static_index]["headline"] = ""
+        first_attempt["content_items"][static_index]["body"] = ""
+
+        retry_attempt = make_content_batch_response(package_types)
+        retry_attempt["content_items"][static_index]["evidence_basis"] = (
+            "This content will drive strong interest in booking a dive."
+        )
+
+        exit_code, calls = self.run_main(
+            [make_completed_stream("end_turn", first_attempt), make_completed_stream("end_turn", retry_attempt)]
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(calls), 2)
         self.assertFalse(self.output_path.exists())
 
 

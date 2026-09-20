@@ -228,12 +228,20 @@ body point, the last slide is the CTA slide), "caption", "cta". Leave "script_sc
 frame), "interaction_suggestion" (a poll/question ONLY if genuinely relevant to this frame \
 sequence - leave it "" rather than forcing one), "cta". Leave "hook"/"script_scenes"/ \
 "slides"/"headline"/"body"/"caption" empty.
-- package_type="static": "headline", "body" (the post's main copy), "caption", "cta". Leave \
-"hook"/"script_scenes"/"slides"/"frames"/"interaction_suggestion" empty.
-- package_type="gbp": "headline", "body" (useful local/business information, natural local \
-relevance, no keyword stuffing), "cta". Google Business Profile posts read differently from \
-Instagram - shorter, no hashtags, more direct/informational. Leave "hook"/"script_scenes"/ \
-"slides"/"frames"/"interaction_suggestion"/"caption" empty.
+- package_type="static": "headline" is MANDATORY - a specific, non-empty headline; NEVER leave \
+it blank. "body" is MANDATORY - the post's main copy; NEVER leave it blank, and NEVER fill it \
+with placeholder or filler text - it must contain useful, specific content a reader could act \
+on, grounded in the slot's topic/content_angle/evidence_basis. "caption" is required, and "cta" \
+is MANDATORY. A Static Post with an empty headline, an empty body, or a missing CTA is invalid \
+and will be rejected - if you are unsure what to write, ground it in the slot data rather than \
+leaving the field blank. Leave "hook"/"script_scenes"/"slides"/"frames"/"interaction_suggestion" \
+empty.
+- package_type="gbp": "headline" is MANDATORY (specific, non-empty - never blank). "body" is \
+MANDATORY (useful local/business information, natural local relevance, no keyword stuffing - \
+never blank and never placeholder/filler text). "cta" is MANDATORY. Google Business Profile \
+posts read differently from Instagram - shorter, no hashtags, more direct/informational. A GBP \
+post with an empty headline or body is invalid and will be rejected. Leave "hook"/ \
+"script_scenes"/"slides"/"frames"/"interaction_suggestion"/"caption" empty.
 
 "footage_note" applies to reel/carousel/story/static (leave it "" for gbp): describe the \
 visual source in plain terms - existing FlyingFish underwater footage, instructor footage, \
@@ -269,10 +277,17 @@ You build every claim through this pipeline - each stage may ONLY do its own job
 "evidence_basis" is a STRICT OBSERVATIONAL FIELD, exactly like Stage 6/7's - it may state \
 ONLY what the supplied evidence actually shows, using words like: is associated with, was \
 observed in, achieved, received, recorded, shows, features, contains, includes, had. NEVER \
-use, in any tense: drives, drive, drove, driven, generates, generated, increases, increased, \
-leads to, led to, results in, resulted in, "primary driver"/"engagement driver", proven, \
-guarantees. If a content idea is not directly evidenced, say so plainly and set \
-evidence_type="hypothesis" - never dress up a hypothesis as an observed fact.
+use, in any tense: drive, drives, driving, drove, driven, boost, boosts, causes, caused, \
+generates, generated, increases, increased, leads to, led to, results in, resulted in, \
+"primary driver"/"engagement driver", proven, guarantees. If a content idea is not directly \
+evidenced, say so plainly and set evidence_type="hypothesis" - never dress up a hypothesis as \
+an observed fact.
+  BAD: "This content uses marine-life interest to drive booking motivation."
+  GOOD: "This content tests a static-post format using the documented marine-life interest pattern."
+  GOOD (hypothesis framing): "Hypothesis: marine-life-focused static content may be useful to \
+  test for booking interest."
+  Only use hypothesis framing when appropriate - do not hedge every sentence into a hypothesis \
+  just to avoid the causal-language check.
 
 COMPETITOR CLAIMS - never state a specific fact about how competitors are positioned or what \
 they do, in ANY field - not even softened with "may" or "likely". If no competitor data was \
@@ -467,6 +482,11 @@ _UNSUPPORTED_FACT_RE = re.compile(
     r"\b\d{1,3}\s?(?:minutes?|mins?|hours?|hrs?)\b",
     re.IGNORECASE,
 )
+# Stage 6's imported _causal_language_match() does not cover "boost"/"boosts" - this
+# supplements it for evidence_basis only, without modifying Stage 6. Same hard,
+# no-escape-valve treatment as every other causal-language violation.
+_BOOST_CAUSAL_RE = re.compile(r"\bboosts?\b", re.IGNORECASE)
+
 # AI-generated footage/video is never allowed, in any field, with no escape valve -
 # FlyingFish's content strategy uses real footage only.
 _AI_FOOTAGE_RE = re.compile(
@@ -639,6 +659,12 @@ def find_content_violations(data: dict, valid_post_ids: set, expected_count: int
                     f"{loc}.evidence_basis: uses unsupported causal language ({phrase!r}) - state "
                     f"only what was observed, or mark evidence_type='hypothesis': {sentence!r}"
                 )
+            boost_match = _BOOST_CAUSAL_RE.search(evidence_basis)
+            if boost_match:
+                hard.append(
+                    f"{loc}.evidence_basis: uses unsupported causal language ({boost_match.group(0)!r}) - state "
+                    f"only what was observed, or mark evidence_type='hypothesis': {evidence_basis!r}"
+                )
 
         combined_text = _item_combined_text(item)
         requires_verification = bool(item.get("requires_verification", False))
@@ -731,6 +757,201 @@ def assemble_content_items(claude_items: list, calendar_items: list) -> list:
     return assembled
 
 
+# --- package-specific retry feedback -----------------------------------------------
+#
+# find_content_violations() returns flat, precisely-worded strings (unchanged - so
+# every existing check on violations["hard"] keeps working). build_retry_feedback()
+# re-organizes those same strings into package-specific, actionable correction blocks
+# for the retry prompt, instead of handing Claude one long "|"-joined dump of internal
+# validator messages. Nothing here changes what is rejected - only how the correction
+# is explained. Any violation that doesn't match a known category still appears
+# verbatim, so a correction is never silently dropped.
+
+_ITEM_LOC_RE = re.compile(r"content_items\[(\d+)\]")
+_STATIC_FIELD_RE = re.compile(r"content_items\[(\d+)\]\.(?:headline|body)\b")
+_REEL_HOOK_RE = re.compile(r"content_items\[(\d+)\]\.hook\b")
+_SCRIPT_SCENES_RE = re.compile(r"content_items\[(\d+)\]\.script_scenes")
+_SLIDES_RE = re.compile(r"content_items\[(\d+)\]\.slides")
+_FRAMES_RE = re.compile(r"content_items\[(\d+)\]\.frames")
+_CTA_FIELD_RE = re.compile(r"content_items\[(\d+)\]\.cta\b")
+_FOOTAGE_FIELD_RE = re.compile(r"content_items\[(\d+)\]\.footage_note\b")
+_EVIDENCE_BASIS_CAUSAL_VIOLATION_RE = re.compile(
+    r"content_items\[(\d+)\]\.evidence_basis: uses unsupported causal language"
+)
+_COMPETITOR_VIOLATION_RE = re.compile(r"content_items\[(\d+)\]: makes a competitor claim")
+_PRICE_VIOLATION_RE = re.compile(r"content_items\[(\d+)\]: states a specific price")
+_OFFER_VIOLATION_RE = re.compile(r"content_items\[(\d+)\]: states a specific offer")
+_AI_FOOTAGE_VIOLATION_RE = re.compile(r"content_items\[(\d+)\]: instructs AI-generated footage")
+_POST_ID_VIOLATION_RE = re.compile(r"content_items\[(\d+)\]: source_post_ids references")
+
+_EVIDENCE_BASIS_BANNED_WORDS = (
+    "drive, drives, driving, boost, boosts, causes, caused, leads to, resulted in, "
+    "engagement driver, primary driver"
+)
+
+
+def build_retry_feedback(hard_violations: list, package_types: list) -> str:
+    """Turn find_content_violations()'s hard-violation strings into package-specific,
+    structured correction instructions for the retry prompt (see module comment
+    above). Each distinct (category, item index) is emitted once."""
+
+    def _package_for(index):
+        return package_types[index] if index is not None and index < len(package_types) else None
+
+    blocks = []
+    seen = set()
+
+    def _emit(key, text):
+        if key not in seen:
+            seen.add(key)
+            blocks.append(text)
+
+    for v in hard_violations:
+        m = _STATIC_FIELD_RE.search(v)
+        if m and _package_for(int(m.group(1))) in ("static", "gbp"):
+            index = int(m.group(1))
+            package = _package_for(index)
+            label = "STATIC POST" if package == "static" else "GOOGLE BUSINESS PROFILE POST"
+            _emit(
+                (package, index),
+                f"{label} CORRECTION (content_items[{index}]):\n"
+                f"The previous response contained an invalid {label.title()} with an empty or "
+                "too-short headline/body.\nRegenerate that item with:\n"
+                "- a specific, non-empty headline\n"
+                "- useful body copy grounded in the slot's topic/content_angle/evidence_basis "
+                "(never placeholder text)\n"
+                "- a CTA\n"
+                "Do not leave any required field empty.",
+            )
+            continue
+
+        m = _EVIDENCE_BASIS_CAUSAL_VIOLATION_RE.search(v)
+        if m:
+            index = int(m.group(1))
+            _emit(
+                ("evidence_basis", index),
+                f"evidence_basis CORRECTION (content_items[{index}]):\n"
+                f"Remove unsupported causal wording such as:\n{_EVIDENCE_BASIS_BANNED_WORDS}.\n"
+                "State only what the supplied evidence directly supports, or explicitly classify "
+                "the reasoning as a hypothesis where appropriate.",
+            )
+            continue
+
+        m = _REEL_HOOK_RE.search(v)
+        if m and _package_for(int(m.group(1))) == "reel":
+            index = int(m.group(1))
+            _emit(
+                ("reel_hook", index),
+                f"REEL CORRECTION (content_items[{index}]): hook is empty - provide a specific first-second hook.",
+            )
+            continue
+
+        m = _SCRIPT_SCENES_RE.search(v)
+        if m and _package_for(int(m.group(1))) == "reel":
+            index = int(m.group(1))
+            _emit(
+                ("reel_script", index),
+                f"REEL CORRECTION (content_items[{index}]): script is missing or incomplete - provide "
+                "at least 2 meaningful scenes.",
+            )
+            continue
+
+        m = _SLIDES_RE.search(v)
+        if m and _package_for(int(m.group(1))) == "carousel":
+            index = int(m.group(1))
+            _emit(
+                ("carousel_slides", index),
+                f"CAROUSEL CORRECTION (content_items[{index}]): slide count is invalid - provide the "
+                "required number of meaningful slides.",
+            )
+            continue
+
+        m = _FRAMES_RE.search(v)
+        if m and _package_for(int(m.group(1))) == "story":
+            index = int(m.group(1))
+            _emit(
+                ("story_frames", index),
+                f"STORY CORRECTION (content_items[{index}]): frame content is missing - provide "
+                "meaningful frame-by-frame content.",
+            )
+            continue
+
+        m = _AI_FOOTAGE_VIOLATION_RE.search(v)
+        if m:
+            index = int(m.group(1))
+            _emit(
+                ("ai_footage", index),
+                f"FOOTAGE CORRECTION (content_items[{index}]): never instruct AI-generated footage/video - "
+                "use real FlyingFish footage, or 'Use existing FlyingFish footage if available.'.",
+            )
+            continue
+
+        m = _COMPETITOR_VIOLATION_RE.search(v)
+        if m:
+            index = int(m.group(1))
+            _emit(
+                ("competitor", index),
+                f"COMPETITOR CLAIM CORRECTION (content_items[{index}]): remove the unhedged competitor "
+                "claim, or set requires_verification=true with a verification_reason.",
+            )
+            continue
+
+        m = _PRICE_VIOLATION_RE.search(v)
+        if m:
+            index = int(m.group(1))
+            _emit(
+                ("price", index),
+                f"PRICE CLAIM CORRECTION (content_items[{index}]): remove the invented price/currency "
+                "amount, or set requires_verification=true with a verification_reason.",
+            )
+            continue
+
+        m = _OFFER_VIOLATION_RE.search(v)
+        if m:
+            index = int(m.group(1))
+            _emit(
+                ("offer", index),
+                f"OFFER/DISCOUNT CLAIM CORRECTION (content_items[{index}]): remove the invented offer/ "
+                "discount, or set requires_verification=true with a verification_reason.",
+            )
+            continue
+
+        m = _POST_ID_VIOLATION_RE.search(v)
+        if m:
+            index = int(m.group(1))
+            _emit(
+                ("post_id", index),
+                f"SOURCE POST ID CORRECTION (content_items[{index}]): only cite post_ids from "
+                "known_post_ids, or use an empty array for a hypothesis.",
+            )
+            continue
+
+        m = _FOOTAGE_FIELD_RE.search(v)
+        if m:
+            index = int(m.group(1))
+            _emit(
+                ("footage_note", index),
+                f"FOOTAGE CORRECTION (content_items[{index}]): footage_note is empty - state a real "
+                "footage source, or 'Use existing FlyingFish footage if available.'.",
+            )
+            continue
+
+        m = _CTA_FIELD_RE.search(v)
+        if m:
+            index = int(m.group(1))
+            _emit(
+                ("cta", index),
+                f"CTA CORRECTION (content_items[{index}]): cta is empty - provide a complete, actionable CTA.",
+            )
+            continue
+
+        # No specific template matched - surface the raw validator message verbatim so
+        # nothing is silently dropped from the retry feedback.
+        _emit(("other", v), f"OTHER CORRECTION: {v}")
+
+    return "\n\n".join(blocks)
+
+
 def generate_batch(
     api_key: str,
     batch_items: list,
@@ -788,8 +1009,8 @@ def generate_batch(
                 for v in violations["hard"]:
                     print(f"  - {v}")
                 extra_note = (
-                    "Your previous response violated the content-safety rules and cannot be "
-                    "published as-is. Fix these specific issues: " + " | ".join(violations["hard"])
+                    "Your previous response violated the content-safety rules and cannot be published "
+                    "as-is. Fix EXACTLY these issues:\n\n" + build_retry_feedback(violations["hard"], package_types)
                 )
                 claude_result = None
                 continue
